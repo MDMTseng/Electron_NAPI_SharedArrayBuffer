@@ -17,13 +17,79 @@
             font-size: 24px;
             color: #333;
         }
+        #controls {
+            margin-top: 20px;
+            text-align: center;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            border-radius: 4px;
+            border: none;
+            background-color: #4CAF50;
+            color: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
     </style>
 </head>
 <body>
     <div id="message">Loading...</div>
+    <div id="controls">
+        <button onclick="sendMessage()">Send Message to Native</button>
+    </div>
     <script>
         const addon = require('./build/Release/hello');
         document.getElementById('message').textContent = addon.hello();
+
+        // Create shared buffer
+        const BUFFER_SIZE = 1024 * 1024;
+        const sharedBuffer = new ArrayBuffer(BUFFER_SIZE * 2 + 16);
+        
+        // Initialize the addon with shared buffer
+        addon.setSharedBuffer(sharedBuffer);
+
+        // Get views for different parts of the buffer
+        const control = new Int32Array(sharedBuffer, 0, 4);
+        const dataR2N = new Uint8Array(sharedBuffer, 16, BUFFER_SIZE);
+        const dataN2R = new Uint8Array(sharedBuffer, 16 + BUFFER_SIZE, BUFFER_SIZE);
+
+        function sendMessage() {
+            const message = "Hello from Renderer!";
+            const encoder = new TextEncoder();
+            const messageBytes = encoder.encode(message);
+            
+            // Copy message to shared buffer
+            dataR2N.set(messageBytes);
+            control[1] = messageBytes.length;
+            
+            // Signal native code
+            Atomics.store(control, 0, 1);
+
+            // Wait for response
+            checkResponse();
+        }
+
+        function checkResponse() {
+            if (Atomics.load(control, 2) === 1) {
+                const length = control[3];
+                const decoder = new TextDecoder();
+                const response = decoder.decode(dataN2R.slice(0, length));
+                document.getElementById('message').textContent = response;
+                
+                // Reset response flag
+                Atomics.store(control, 2, 0);
+            } else {
+                setTimeout(checkResponse, 10);
+            }
+        }
+
+        // Cleanup when window closes
+        window.addEventListener('beforeunload', () => {
+            addon.cleanup();
+        });
     </script>
 </body>
 </html> 
