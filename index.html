@@ -1,25 +1,23 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Electron N-API Hello World</title>
+    <title>Shared Memory Throughput Test</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
             margin: 40px;
             background-color: #f0f0f0;
         }
-        #message {
-            padding: 20px;
+        .container {
             background-color: white;
+            padding: 20px;
             border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            text-align: center;
-            font-size: 24px;
-            color: #333;
         }
-        #controls {
+        .stats {
             margin-top: 20px;
-            text-align: center;
+            font-size: 16px;
+            line-height: 1.6;
         }
         button {
             padding: 10px 20px;
@@ -29,60 +27,132 @@
             background-color: #4CAF50;
             color: white;
             cursor: pointer;
+            margin: 5px;
         }
         button:hover {
             background-color: #45a049;
         }
+        input {
+            padding: 8px;
+            font-size: 16px;
+            margin: 5px;
+            width: 100px;
+        }
+        .controls {
+            margin-bottom: 20px;
+        }
     </style>
 </head>
 <body>
-    <div id="message">Loading...</div>
-    <div id="controls">
-        <button onclick="sendMessage()">Send Message to Native</button>
+    <div class="container">
+        <div class="controls">
+            <input type="number" id="messageSize" value="1024" min="1" max="1048576"> bytes per message
+            <input type="number" id="duration" value="5" min="1" max="60"> seconds test
+            <button onclick="startTest()">Start Test</button>
+            <button onclick="stopTest()">Stop Test</button>
+        </div>
+        <div class="stats" id="stats">
+            Click Start Test to begin throughput measurement
+        </div>
     </div>
     <script>
         const addon = require('./build/Release/hello');
-        document.getElementById('message').textContent = addon.hello();
-
-        // Create shared buffer
-        const BUFFER_SIZE = 1024 * 1024;
+        const BUFFER_SIZE = 1024 * 1024*90;
         const sharedBuffer = new ArrayBuffer(BUFFER_SIZE * 2 + 16);
-        
-        // Initialize the addon with shared buffer
         addon.setSharedBuffer(sharedBuffer);
 
-        // Get views for different parts of the buffer
         const control = new Int32Array(sharedBuffer, 0, 4);
         const dataR2N = new Uint8Array(sharedBuffer, 16, BUFFER_SIZE);
         const dataN2R = new Uint8Array(sharedBuffer, 16 + BUFFER_SIZE, BUFFER_SIZE);
 
-        function sendMessage() {
-            const message = "Hello from Renderer!";
-            const encoder = new TextEncoder();
-            const messageBytes = encoder.encode(message);
-            
-            // Copy message to shared buffer
-            dataR2N.set(messageBytes);
-            control[1] = messageBytes.length;
-            
-            // Signal native code
-            Atomics.store(control, 0, 1);
+        let testRunning = false;
+        let testData = null;
+        let messagesSent = 0;
 
-            // Wait for response
-            checkResponse();
+        function generateTestData(size) {
+            const data = new Uint8Array(size);
+            for (let i = 0; i < size; i++) {
+                data[i] = i % 256;
+            }
+            return data;
+        }
+
+        async function startTest() {
+            const messageSize = parseInt(document.getElementById('messageSize').value);
+            const duration = parseInt(document.getElementById('duration').value);
+            
+            if (messageSize > BUFFER_SIZE) {
+                alert('Message size cannot exceed buffer size');
+                return;
+            }
+
+            testData = generateTestData(messageSize);
+            testRunning = true;
+            messagesSent = 0;
+            
+            addon.startThroughputTest();
+            
+            // Start sending messages
+            sendMessage();
+            
+            // Update stats periodically
+            const updateStats = () => {
+                if (!testRunning) return;
+                
+                const stats = addon.getThroughputStats();
+                document.getElementById('stats').innerHTML = `
+                    Messages/sec: ${stats.messagesPerSecond.toFixed(2)}<br>
+                    MB/sec: ${(stats.bytesPerSecond / (1024 * 1024)).toFixed(2)}<br>
+                    Total Messages: ${stats.totalMessages}<br>
+                    Total MB: ${(stats.totalBytes / (1024 * 1024)).toFixed(2)}<br>
+                    Time: ${stats.seconds.toFixed(2)}s
+                `;
+                
+                if (stats.seconds < duration) {
+                    setTimeout(updateStats, 100);
+                } else {
+                    stopTest();
+                }
+            };
+            
+            updateStats();
+        }
+
+        function stopTest() {
+            testRunning = false;
+            const finalStats = addon.getThroughputStats();
+            document.getElementById('stats').innerHTML = `
+                <strong>Final Results:</strong><br>
+                Messages/sec: ${finalStats.messagesPerSecond.toFixed(2)}<br>
+                MB/sec: ${(finalStats.bytesPerSecond / (1024 * 1024)).toFixed(2)}<br>
+                Total Messages: ${finalStats.totalMessages}<br>
+                Total MB: ${(finalStats.totalBytes / (1024 * 1024)).toFixed(2)}<br>
+                Time: ${finalStats.seconds.toFixed(2)}s
+            `;
+        }
+
+        function sendMessage() {
+            if (!testRunning) return;
+            
+            if (Atomics.load(control, 0) === 0) {
+                dataR2N.set(testData);
+                control[1] = testData.length;
+                Atomics.store(control, 0, 1);
+                messagesSent++;
+                
+                // Wait for response
+                checkResponse();
+            } else {
+                setTimeout(sendMessage, 0);
+            }
         }
 
         function checkResponse() {
             if (Atomics.load(control, 2) === 1) {
-                const length = control[3];
-                const decoder = new TextDecoder();
-                const response = decoder.decode(dataN2R.slice(0, length));
-                document.getElementById('message').textContent = response;
-                
-                // Reset response flag
                 Atomics.store(control, 2, 0);
+                sendMessage(); // Send next message immediately
             } else {
-                setTimeout(checkResponse, 10);
+                setTimeout(checkResponse, 0);
             }
         }
 
