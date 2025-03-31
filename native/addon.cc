@@ -9,6 +9,11 @@ std::atomic<uint64_t> totalBytesProcessed{0};
 std::atomic<uint64_t> totalMessagesProcessed{0};
 std::chrono::high_resolution_clock::time_point startTime;
 
+// Add these global variables for native-to-renderer communication
+std::thread* nativeDataThread = nullptr;
+bool shouldSendData = false;
+uint32_t sendInterval = 1000; // milliseconds
+
 Napi::String Hello(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   return Napi::String::New(env, "Hello from N-API! dd");
@@ -43,6 +48,34 @@ void NativeThread() {
 
 std::thread* nativeThread = nullptr;
 
+void SendDataToRenderer() {
+    while (shouldRun) {
+        if (shouldSendData && control && dataN2R) {
+            // Wait until renderer has processed previous message
+            while (control[2].load(std::memory_order_seq_cst) == 1) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                if (!shouldRun) return;
+            }
+
+            // Generate some test data
+            std::string message = "Data from native: " + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+            size_t length = message.size();
+
+            // Copy data to shared buffer
+            memcpy(dataN2R, message.c_str(), length);
+            control[3].store(length, std::memory_order_seq_cst);
+            
+            // Signal renderer
+            control[2].store(1, std::memory_order_seq_cst);
+
+            // Wait for specified interval
+            std::this_thread::sleep_for(std::chrono::milliseconds(sendInterval));
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+}
+
 Napi::Value SetSharedBuffer(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     
@@ -75,11 +108,19 @@ Napi::Value SetSharedBuffer(const Napi::CallbackInfo& info) {
 Napi::Value Cleanup(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     
+    shouldSendData = false;
+    shouldRun = false;
+
     if (nativeThread) {
-        shouldRun = false;
         nativeThread->join();
         delete nativeThread;
         nativeThread = nullptr;
+    }
+
+    if (nativeDataThread) {
+        nativeDataThread->join();
+        delete nativeDataThread;
+        nativeDataThread = nullptr;
     }
 
     return env.Undefined();
@@ -110,12 +151,36 @@ Napi::Value GetThroughputStats(const Napi::CallbackInfo& info) {
     return stats;
 }
 
+Napi::Value StartSendingData(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    
+    if (info.Length() > 0 && info[0].IsNumber()) {
+        sendInterval = info[0].As<Napi::Number>().Uint32Value();
+    }
+
+    shouldSendData = true;
+    
+    // Start the sending thread if not already running
+    if (!nativeDataThread) {
+        nativeDataThread = new std::thread(SendDataToRenderer);
+    }
+    
+    return env.Undefined();
+}
+
+Napi::Value StopSendingData(const Napi::CallbackInfo& info) {
+    shouldSendData = false;
+    return info.Env().Undefined();
+}
+
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set("setSharedBuffer", Napi::Function::New(env, SetSharedBuffer));
     exports.Set("cleanup", Napi::Function::New(env, Cleanup));
     exports.Set("hello", Napi::Function::New(env, Hello));
     exports.Set("startThroughputTest", Napi::Function::New(env, StartThroughputTest));
     exports.Set("getThroughputStats", Napi::Function::New(env, GetThroughputStats));
+    exports.Set("startSendingData", Napi::Function::New(env, StartSendingData));
+    exports.Set("stopSendingData", Napi::Function::New(env, StopSendingData));
     return exports;
 }
 
