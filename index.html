@@ -56,7 +56,7 @@
         </div>
     </div>
     <script>
-        const addon = require('./build/Release/hello');
+        const addon = require('./build/Release/addon');
         const BUFFER_SIZE = 1024 * 1024*90;
         const sharedBuffer = new ArrayBuffer(BUFFER_SIZE * 2 + 16);
         addon.setSharedBuffer(sharedBuffer);

@@ -1,13 +1,14 @@
 {
   "targets": [
     {
-      "target_name": "hello",
+      "target_name": "addon",
       "cflags!": [ "-fno-exceptions" ],
       "cflags_cc!": [ "-fno-exceptions" ],
-      "sources": [ "native/hello.cc" ],
+      "sources": [ "native/addon.cc" ],
       "include_dirs": [
         "<!@(node -p \"require('node-addon-api').include\")",
-        "<!(node -e \"require('node-addon-api').include\")"
+        "<!(node -e \"require('node-addon-api').include\")",
+        "<!(node -e \"require('node-api-headers').include\")"
       ],
       "defines": [ 
         "NAPI_DISABLE_CPP_EXCEPTIONS",
