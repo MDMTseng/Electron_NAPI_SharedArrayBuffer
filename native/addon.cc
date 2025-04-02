@@ -89,6 +89,40 @@ void SendDataToRenderer() {
     }
 }
 
+void CleanupExistingResources() {
+    // Stop all running threads
+    shouldSendData = false;
+    shouldRun = false;
+
+    // Cleanup native thread
+    if (nativeThread) {
+        nativeThread->join();
+        delete nativeThread;
+        nativeThread = nullptr;
+    }
+
+    // Cleanup data sending thread
+    if (nativeDataThread) {
+        nativeDataThread->join();
+        delete nativeDataThread;
+        nativeDataThread = nullptr;
+    }
+
+    // Reset pointers
+    control = nullptr;
+    dataR2N = nullptr;
+    dataN2R = nullptr;
+    
+    // Reset buffer sizes
+    r2nBufferSize = 0;
+    n2rBufferSize = 0;
+
+    // Clear shared buffer reference
+    if (!sharedArrayBufferRef.IsEmpty()) {
+        sharedArrayBufferRef.Reset();
+    }
+}
+
 Napi::Value SetSharedBuffer(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     
@@ -96,6 +130,9 @@ Napi::Value SetSharedBuffer(const Napi::CallbackInfo& info) {
         Napi::TypeError::New(env, "Expected (ArrayBuffer, Number, Number)").ThrowAsJavaScriptException();
         return env.Undefined();
     }
+
+    // Cleanup existing resources first
+    CleanupExistingResources();
 
     auto sab = info[0].As<Napi::ArrayBuffer>();
     r2nBufferSize = info[1].As<Napi::Number>().Uint32Value();
@@ -109,6 +146,7 @@ Napi::Value SetSharedBuffer(const Napi::CallbackInfo& info) {
         return env.Undefined();
     }
 
+    // Set up new shared buffer
     sharedArrayBufferRef = Napi::Persistent(sab);
     sharedArrayBufferRef.SuppressDestruct();
 
@@ -117,12 +155,12 @@ Napi::Value SetSharedBuffer(const Napi::CallbackInfo& info) {
     dataR2N = reinterpret_cast<uint8_t*>((int8_t*)base + 16);
     dataN2R = dataR2N + r2nBufferSize;
 
-    if (nativeThread) {
-        shouldRun = false;
-        nativeThread->join();
-        delete nativeThread;
+    // Initialize control values
+    for (int i = 0; i < 4; i++) {
+        control[i].store(0, std::memory_order_seq_cst);
     }
 
+    // Start new native thread
     shouldRun = true;
     nativeThread = new std::thread(NativeThread);
 
