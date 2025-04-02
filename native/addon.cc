@@ -3,6 +3,88 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <vector>
+#include <functional>
+
+// Forward declare our async helper
+void schedule_async_callback(Napi::Env env, std::function<void()> callback);
+
+
+
+Napi::FunctionReference messageCallback;
+void setMessageCallback(const Napi::Function& callback) {
+    messageCallback = Napi::Persistent(callback);
+}
+
+
+
+Napi::Value SetMessageCallback(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    
+    if (info.Length() < 1 || !info[0].IsFunction()) {
+        Napi::TypeError::New(env, "Expected a function argument").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    setMessageCallback(info[0].As<Napi::Function>());
+    return env.Undefined();
+}
+
+
+// Helper function to execute callbacks in the Node.js event loop
+void schedule_async_callback(Napi::Env env, std::function<void()> callback) {
+    struct AsyncData {
+        std::function<void()> callback;
+        napi_async_work work;
+    };
+
+    auto async_data = new AsyncData{std::move(callback), nullptr};
+
+    // Create async work
+    napi_create_async_work(
+        env,
+        nullptr,
+        Napi::String::New(env, "AsyncCallback"),
+        // Execute (runs in worker thread - we do nothing here)
+        [](napi_env env, void* data) {},
+        // Complete (runs in main thread - we execute our callback here)
+        [](napi_env env, napi_status status, void* data) {
+            auto async_data = static_cast<AsyncData*>(data);
+            async_data->callback();
+            delete async_data;
+        },
+        async_data,
+        &async_data->work
+    );
+
+    // Queue the async work
+    napi_queue_async_work(env, async_data->work);
+}
+
+
+
+void triggerCallback(std::vector<uint8_t>& data) {
+    if (!messageCallback.IsEmpty()) {
+        // Create a copy of the data for the callback
+        // Create a function to execute the callback in the JavaScript thread
+        auto callback = [data = std::move(data)]() {
+            Napi::HandleScope scope(messageCallback.Env());
+            
+            // Create a Node.js Buffer containing our data
+            Napi::Buffer<uint8_t> buffer = Napi::Buffer<uint8_t>::Copy(
+                messageCallback.Env(), 
+                data.data(), 
+                data.size()
+            );
+            
+            // Call the JavaScript callback with the buffer
+            messageCallback.Call({buffer});
+        };
+        
+        // Schedule the callback to be executed in the Node.js event loop
+        schedule_async_callback(messageCallback.Env(), std::move(callback));
+    }
+}
 
 class SharedMemoryChannel {
 public:
@@ -14,6 +96,7 @@ public:
     ~SharedMemoryChannel() {
         cleanup();
     }
+
 
     void initialize(Napi::ArrayBuffer& sab, size_t r2nSize, size_t n2rSize) {
         cleanup(); // Cleanup existing resources first
@@ -72,6 +155,11 @@ public:
         if (!sharedArrayBufferRef.IsEmpty()) {
             sharedArrayBufferRef.Reset();
         }
+
+        // Clear callback reference
+        if (!messageCallback.IsEmpty()) {
+            messageCallback.Reset();
+        }
     }
 
     void startSendingData(uint32_t interval) {
@@ -87,6 +175,7 @@ public:
     void stopSendingData() {
         shouldSendData = false;
     }
+
 
 private:
     void processMessage() {
@@ -132,7 +221,7 @@ private:
                 // Generate some test data
                 std::string message = std::to_string(send_count++);
                 size_t length = message.size();
-                printf("message:%s, length:%d\n", message.c_str(), length);
+                printf("message:%s, length:%zu\n", message.c_str(), length);
                 
                 if (length <= n2rBufferSize) {
                     memcpy(dataN2R, message.c_str(), length);
@@ -183,7 +272,7 @@ Napi::Value SetSharedBuffer(const Napi::CallbackInfo& info) {
     size_t r2nSize = info[1].As<Napi::Number>().Uint32Value();
     size_t n2rSize = info[2].As<Napi::Number>().Uint32Value();
 
-    printf("r2nBufferSize: %d, n2rBufferSize: %d\n", r2nSize, n2rSize);
+    printf("r2nBufferSize: %zu, n2rBufferSize: %zu\n", r2nSize, n2rSize);
 
     size_t totalSize = 16 + r2nSize + n2rSize; // 16 bytes for control
     if (sab.ByteLength() < totalSize) {
@@ -194,6 +283,7 @@ Napi::Value SetSharedBuffer(const Napi::CallbackInfo& info) {
     channel.initialize(sab, r2nSize, n2rSize);
     return env.Undefined();
 }
+
 
 Napi::Value Cleanup(const Napi::CallbackInfo& info) {
     channel.cleanup();
@@ -217,12 +307,24 @@ Napi::Value StopSendingData(const Napi::CallbackInfo& info) {
     return info.Env().Undefined();
 }
 
+Napi::Value TriggerTestCallback(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    
+    std::string testMessage = "Test callback from native code!";
+    std::vector<uint8_t> testMessageVector(testMessage.begin(), testMessage.end());
+    triggerCallback(testMessageVector);
+    
+    return env.Undefined();
+}
+
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set("setSharedBuffer", Napi::Function::New(env, SetSharedBuffer));
     exports.Set("cleanup", Napi::Function::New(env, Cleanup));
     exports.Set("hello", Napi::Function::New(env, Hello));
     exports.Set("startSendingData", Napi::Function::New(env, StartSendingData));
     exports.Set("stopSendingData", Napi::Function::New(env, StopSendingData));
+    exports.Set("setMessageCallback", Napi::Function::New(env, SetMessageCallback));
+    exports.Set("triggerTestCallback", Napi::Function::New(env, TriggerTestCallback));
     return exports;
 }
 

@@ -76,6 +76,7 @@
             <input type="number" id="interval" value="1000" min="100" max="10000"> ms interval
             <button onclick="startReceiving()">Start Receiving</button>
             <button onclick="stopReceiving()">Stop Receiving</button>
+            <button onclick="triggerNativeCallback()">Trigger Native Callback</button>
         </div>
         <div class="message-log" id="messageLog">
             Messages from native code will appear here
@@ -89,7 +90,6 @@
             constructor(rendererToNativeSize = 1024, nativeToRendererSize = 1024) {
                 this.RENDERER_TO_NATIVE_SIZE = rendererToNativeSize;
                 this.NATIVE_TO_RENDERER_SIZE = nativeToRendererSize;
-                
                 this.initialize();
             }
 
@@ -99,6 +99,12 @@
                 
                 // Initialize the addon with the shared buffer and sizes
                 addon.setSharedBuffer(this.sharedBuffer, this.RENDERER_TO_NATIVE_SIZE, this.NATIVE_TO_RENDERER_SIZE);
+
+                // Set up the native callback
+                addon.setMessageCallback((buffer) => {
+                    
+                    console.log('buffer', buffer);
+                });
 
                 // Control array layout (16 bytes total):
                 // [0] - R→N signal
@@ -256,6 +262,10 @@
             if (!channel) return;
             addon.stopSendingData();
             channel.stopReceiving();
+        }
+
+        function triggerNativeCallback() {
+            addon.triggerTestCallback();
         }
 
         function updateQueueStatus() {
