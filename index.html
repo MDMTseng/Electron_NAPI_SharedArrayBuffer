@@ -78,13 +78,29 @@
     </div>
     <script>
         const addon = require('./build/Release/addon');
-        const BUFFER_SIZE = 1024 * 1024*90;
-        const sharedBuffer = new ArrayBuffer(BUFFER_SIZE * 2 + 16);
-        addon.setSharedBuffer(sharedBuffer);
+        
+        // Define buffer sizes for each direction
+        const RENDERER_TO_NATIVE_SIZE = 12345;  // for renderer → native
+        const NATIVE_TO_RENDERER_SIZE = 54321;  // for native → renderer
+        
+        // Create shared buffer with space for both directions plus control array (24 bytes)
+        const sharedBuffer = new ArrayBuffer(24 + RENDERER_TO_NATIVE_SIZE + NATIVE_TO_RENDERER_SIZE);
+        
+        // Initialize the addon with the shared buffer and sizes
+        addon.setSharedBuffer(sharedBuffer, RENDERER_TO_NATIVE_SIZE, NATIVE_TO_RENDERER_SIZE);
 
-        const control = new Int32Array(sharedBuffer, 0, 4);
-        const dataR2N = new Uint8Array(sharedBuffer, 16, BUFFER_SIZE);
-        const dataN2R = new Uint8Array(sharedBuffer, 16 + BUFFER_SIZE, BUFFER_SIZE);
+        // Control array layout (24 bytes total):
+        // [0] - R→N signal
+        // [1] - R→N length
+        // [2] - N→R echo signal
+        // [3] - N→R echo length
+        // [4] - N→R message signal
+        // [5] - N→R message length
+        const control = new Int32Array(sharedBuffer, 0, 6);
+        
+        // Create views for the data regions
+        const dataR2N = new Uint8Array(sharedBuffer, 24, RENDERER_TO_NATIVE_SIZE);
+        const dataN2R = new Uint8Array(sharedBuffer, 24 + RENDERER_TO_NATIVE_SIZE, NATIVE_TO_RENDERER_SIZE);
 
         let testRunning = false;
         let testData = null;
@@ -92,6 +108,9 @@
         let isReceiving = false;
 
         function generateTestData(size) {
+            if (size > RENDERER_TO_NATIVE_SIZE) {
+                throw new Error('Test data size exceeds buffer size');
+            }
             const data = new Uint8Array(size);
             for (let i = 0; i < size; i++) {
                 data[i] = i % 256;
@@ -103,8 +122,8 @@
             const messageSize = parseInt(document.getElementById('messageSize').value);
             const duration = parseInt(document.getElementById('duration').value);
             
-            if (messageSize > BUFFER_SIZE) {
-                alert('Message size cannot exceed buffer size');
+            if (messageSize > RENDERER_TO_NATIVE_SIZE) {
+                alert('Message size cannot exceed renderer-to-native buffer size');
                 return;
             }
 
@@ -114,29 +133,13 @@
             
             addon.startThroughputTest();
             
+            // Start the test timer
+            setTimeout(() => {
+                stopTest();
+            }, duration * 1000);
+            
             // Start sending messages
             sendMessage();
-            
-            // Update stats periodically
-            const updateStats = () => {
-                if (!testRunning) return;
-                
-                const stats = addon.getThroughputStats();
-                document.getElementById('stats').innerHTML = `
-                    Messages/sec: ${stats.messagesPerSecond.toFixed(2)}<br>
-                    MB/sec: ${(stats.bytesPerSecond / (1024 * 1024)).toFixed(2)}<br>
-                    Total Messages: ${stats.totalMessages}<br>
-                    Total MB: ${(stats.totalBytes / (1024 * 1024)).toFixed(2)}<br>
-                    Time: ${stats.seconds.toFixed(2)}s
-                `;
-                
-                if (stats.seconds < duration) {
-                    setTimeout(updateStats, 100);
-                } else {
-                    stopTest();
-                }
-            };
-            
             updateStats();
         }
 
@@ -156,6 +159,7 @@
         function sendMessage() {
             if (!testRunning) return;
             
+            // Try to send immediately if buffer is free
             if (Atomics.load(control, 0) === 0) {
                 dataR2N.set(testData);
                 control[1] = testData.length;
@@ -165,16 +169,21 @@
                 // Wait for response
                 checkResponse();
             } else {
-                setTimeout(sendMessage, 0);
+                // Buffer is busy, try again very soon
+                requestAnimationFrame(sendMessage);
             }
         }
 
         function checkResponse() {
+            if (!testRunning) return;
+            
             if (Atomics.load(control, 2) === 1) {
                 Atomics.store(control, 2, 0);
-                sendMessage(); // Send next message immediately
+                // Send next message immediately
+                requestAnimationFrame(sendMessage);
             } else {
-                setTimeout(checkResponse, 0);
+                // Check again very soon
+                requestAnimationFrame(checkResponse);
             }
         }
 
@@ -193,29 +202,45 @@
         function startMessageCheck() {
             if (!isReceiving) return;
 
-            if (Atomics.load(control, 2) === 1) {
-                const length = control[3];
-                const decoder = new TextDecoder();
-                const message = decoder.decode(dataN2R.slice(0, length));
-                
-                // Add message to log
-                const messageLog = document.getElementById('messageLog');
-                const messageElement = document.createElement('div');
-                messageElement.className = 'message';
-                messageElement.textContent = message;
-                messageLog.insertBefore(messageElement, messageLog.firstChild);
-                
-                // Limit number of messages shown
-                while (messageLog.children.length > 100) {
-                    messageLog.removeChild(messageLog.lastChild);
+            if (Atomics.load(control, 4) === 1) {
+                const length = control[5];
+                if (length <= NATIVE_TO_RENDERER_SIZE) {
+                    const decoder = new TextDecoder();
+                    let data=dataN2R.slice(0, length);
+                    const message = decoder.decode(data);
+                    console.log(data, length);
+                    const messageLog = document.getElementById('messageLog');
+                    const messageElement = document.createElement('div');
+                    messageElement.className = 'message';
+                    messageElement.textContent = message;
+                    messageLog.insertBefore(messageElement, messageLog.firstChild);
+                    
+                    while (messageLog.children.length > 100) {
+                        messageLog.removeChild(messageLog.lastChild);
+                    }
                 }
-
-                // Reset flag to allow next message
-                Atomics.store(control, 2, 0);
+                Atomics.store(control, 4, 0);
             }
 
-            // Continue checking for messages
             setTimeout(startMessageCheck, 1);
+        }
+
+        function updateStats() {
+            if (!testRunning) return;
+            
+            const stats = addon.getThroughputStats();
+            document.getElementById('stats').innerHTML = `
+                <strong>Current Results:</strong><br>
+                Messages/sec: ${stats.messagesPerSecond.toFixed(2)}<br>
+                MB/sec: ${(stats.bytesPerSecond / (1024 * 1024)).toFixed(2)}<br>
+                Total Messages: ${stats.totalMessages}<br>
+                Total MB: ${(stats.totalBytes / (1024 * 1024)).toFixed(2)}<br>
+                Time: ${stats.seconds.toFixed(2)}s
+            `;
+            
+            if (testRunning) {
+                setTimeout(updateStats, 100); // Update every 100ms
+            }
         }
 
         // Cleanup when window closes

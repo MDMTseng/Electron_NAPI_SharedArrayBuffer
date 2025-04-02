@@ -2,6 +2,7 @@
 #include <thread>
 #include <atomic>
 #include <chrono>
+#include <cstring>
 
 Napi::Reference<Napi::ArrayBuffer> sharedArrayBufferRef;
 std::atomic<bool> shouldRun{true};
@@ -14,59 +15,84 @@ std::thread* nativeDataThread = nullptr;
 bool shouldSendData = false;
 uint32_t sendInterval = 1000; // milliseconds
 
+uint8_t* dataR2N = nullptr;
+uint8_t* dataN2R = nullptr;
+std::atomic<int32_t>* control = nullptr;
+size_t r2nBufferSize = 0;
+size_t n2rBufferSize = 0;
+
+// Control array layout (24 bytes total):
+// [0] - R→N signal
+// [1] - R→N length
+// [2] - N→R echo signal
+// [3] - N→R echo length
+// [4] - N→R message signal
+// [5] - N→R message length
+
 Napi::String Hello(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   return Napi::String::New(env, "Hello from N-API! dd");
 }
 
-uint8_t* dataR2N = nullptr;
-uint8_t* dataN2R = nullptr;
-std::atomic<int32_t>* control = nullptr;
-const size_t BUFFER_SIZE = 1024 * 1024;
+void ProcessMessage() {
+    if (control[0] == 1) {
+        size_t length = static_cast<size_t>(control[1]);
+        if (length > 0 && length <= r2nBufferSize) {  // Now using consistent types
+            // Print received data
+            printf("Data from renderer: ");
+            for (size_t i = 0; i < length && i < 32; i++) {  // Print up to first 32 bytes
+                printf("%02x ", dataR2N[i]);
+            }
+            if (length > 32) printf("...");
+            printf(" (length: %zu)\n", length);
+            
+            // Echo the message back
+            std::memcpy(dataN2R, dataR2N, length);
+            control[2] = 1;  // Set echo signal
+            control[3] = static_cast<int32_t>(length);  // Set echo length
+            control[0] = 0;  // Reset R→N signal
+            
+            // Update throughput stats
+            totalBytesProcessed.fetch_add(length, std::memory_order_seq_cst);
+            totalMessagesProcessed.fetch_add(1, std::memory_order_seq_cst);
+        }
+    }
+}
 
 void NativeThread() {
     while (shouldRun) {
         // Wait for Renderer → Native
         while (control && control[0].load(std::memory_order_seq_cst) != 1) {
-            std::this_thread::sleep_for(std::chrono::microseconds(1000));
+            std::this_thread::sleep_for(std::chrono::microseconds(1));
             if (!shouldRun) return;
         }
 
         if (!control) continue;
 
-        int length = control[1].load(std::memory_order_seq_cst);
-        totalBytesProcessed.fetch_add(length, std::memory_order_seq_cst);
-        totalMessagesProcessed.fetch_add(1, std::memory_order_seq_cst);
-
-        // Respond back
-        memcpy(dataN2R, dataR2N, length);
-        control[3].store(length, std::memory_order_seq_cst);
-        control[2].store(1, std::memory_order_seq_cst);
-        control[0].store(0, std::memory_order_seq_cst);
+        ProcessMessage();
     }
 }
 
 std::thread* nativeThread = nullptr;
-
+int send_count = 0;
 void SendDataToRenderer() {
     while (shouldRun) {
         if (shouldSendData && control && dataN2R) {
             // Wait until renderer has processed previous message
-            while (control[2].load(std::memory_order_seq_cst) == 1) {
+            while (control[4].load(std::memory_order_seq_cst) == 1) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 if (!shouldRun) return;
             }
 
             // Generate some test data
-            std::string message = "Data from native: " + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+            std::string message = std::to_string(send_count++);//"Data from native: " + std::to_string(send_count++) + " " + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
             size_t length = message.size();
-
-            // Copy data to shared buffer
-            memcpy(dataN2R, message.c_str(), length);
-            control[3].store(length, std::memory_order_seq_cst);
-            
-            // Signal renderer
-            control[2].store(1, std::memory_order_seq_cst);
+            printf("message:%s, length:%d\n", message.c_str(), length);
+            if (length <= n2rBufferSize) {  // Add size check
+                memcpy(dataN2R, message.c_str(), length);  // Removed r2nBufferSize offset
+                control[5].store(length, std::memory_order_seq_cst);
+                control[4].store(1, std::memory_order_seq_cst);
+            }
 
             // Wait for specified interval
             std::this_thread::sleep_for(std::chrono::milliseconds(sendInterval));
@@ -79,19 +105,30 @@ void SendDataToRenderer() {
 Napi::Value SetSharedBuffer(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     
-    if (!info[0].IsArrayBuffer()) {
-        Napi::TypeError::New(env, "Expected ArrayBuffer").ThrowAsJavaScriptException();
+    if (info.Length() < 3 || !info[0].IsArrayBuffer() || !info[1].IsNumber() || !info[2].IsNumber()) {
+        Napi::TypeError::New(env, "Expected (ArrayBuffer, Number, Number)").ThrowAsJavaScriptException();
         return env.Undefined();
     }
 
     auto sab = info[0].As<Napi::ArrayBuffer>();
+    r2nBufferSize = info[1].As<Napi::Number>().Uint32Value();
+    n2rBufferSize = info[2].As<Napi::Number>().Uint32Value();
+
+    printf("r2nBufferSize: %d, n2rBufferSize: %d\n", r2nBufferSize, n2rBufferSize);
+
+    size_t totalSize = 24 + r2nBufferSize + n2rBufferSize; // 24 bytes for control
+    if (sab.ByteLength() < totalSize) {
+        Napi::TypeError::New(env, "Buffer too small for specified sizes").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
     sharedArrayBufferRef = Napi::Persistent(sab);
     sharedArrayBufferRef.SuppressDestruct();
 
     void* base = sab.Data();
     control = reinterpret_cast<std::atomic<int32_t>*>(base);
-    dataR2N = reinterpret_cast<uint8_t*>((int8_t*)base + 16);
-    dataN2R = dataR2N + BUFFER_SIZE;
+    dataR2N = reinterpret_cast<uint8_t*>((int8_t*)base + 24);
+    dataN2R = dataR2N + r2nBufferSize;
 
     if (nativeThread) {
         shouldRun = false;
