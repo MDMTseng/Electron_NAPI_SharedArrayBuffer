@@ -169,22 +169,9 @@ Napi::Value SetSharedBuffer(const Napi::CallbackInfo& info) {
 
 Napi::Value Cleanup(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
-    
-    shouldSendData = false;
-    shouldRun = false;
+    CleanupExistingResources();
 
-    if (nativeThread) {
-        nativeThread->join();
-        delete nativeThread;
-        nativeThread = nullptr;
-    }
-
-    if (nativeDataThread) {
-        nativeDataThread->join();
-        delete nativeDataThread;
-        nativeDataThread = nullptr;
-    }
-
+    printf("Cleanup 3\n");
     return env.Undefined();
 }
 
