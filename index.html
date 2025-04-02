@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Shared Memory Throughput Test</title>
+    <title>Shared Memory Communication Test</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
@@ -13,11 +13,6 @@
             padding: 20px;
             border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .stats {
-            margin-top: 20px;
-            font-size: 16px;
-            line-height: 1.6;
         }
         button {
             padding: 10px 20px;
@@ -36,7 +31,6 @@
             padding: 8px;
             font-size: 16px;
             margin: 5px;
-            width: 100px;
         }
         .controls {
             margin-bottom: 20px;
@@ -54,19 +48,30 @@
             padding: 5px;
             border-bottom: 1px solid #eee;
         }
+        .send-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .send-controls input {
+            flex: 1;
+            min-width: 200px;
+        }
+        .queue-status {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="controls">
-            <input type="number" id="messageSize" value="1024" min="1" max="1048576"> bytes per message
-            <input type="number" id="duration" value="5" min="1" max="60"> seconds test
-            <button onclick="startTest()">Start Test</button>
-            <button onclick="stopTest()">Stop Test</button>
+        <div class="send-controls">
+            <input type="text" id="messageInput" placeholder="Enter message to send">
+            <button onclick="queueMessage()">Send</button>
         </div>
-        <div class="stats" id="stats">
-            Click Start Test to begin throughput measurement
-        </div>
+        <div class="queue-status" id="queueStatus">Queue: 0 messages</div>
         <div class="controls">
             <input type="number" id="interval" value="1000" min="100" max="10000"> ms interval
             <button onclick="startReceiving()">Start Receiving</button>
@@ -79,174 +84,163 @@
     <script>
         const addon = require('./build/Release/addon');
         
-        // Define buffer sizes for each direction
-        const RENDERER_TO_NATIVE_SIZE = 12345;  // for renderer → native
-        const NATIVE_TO_RENDERER_SIZE = 54321;  // for native → renderer
-        
-        // Create shared buffer with space for both directions plus control array (24 bytes)
-        const sharedBuffer = new ArrayBuffer(24 + RENDERER_TO_NATIVE_SIZE + NATIVE_TO_RENDERER_SIZE);
-        
-        // Initialize the addon with the shared buffer and sizes
-        addon.setSharedBuffer(sharedBuffer, RENDERER_TO_NATIVE_SIZE, NATIVE_TO_RENDERER_SIZE);
-
-        // Control array layout (24 bytes total):
-        // [0] - R→N signal
-        // [1] - R→N length
-        // [2] - N→R echo signal
-        // [3] - N→R echo length
-        // [4] - N→R message signal
-        // [5] - N→R message length
-        const control = new Int32Array(sharedBuffer, 0, 6);
-        
-        // Create views for the data regions
-        const dataR2N = new Uint8Array(sharedBuffer, 24, RENDERER_TO_NATIVE_SIZE);
-        const dataN2R = new Uint8Array(sharedBuffer, 24 + RENDERER_TO_NATIVE_SIZE, NATIVE_TO_RENDERER_SIZE);
-
-        let testRunning = false;
-        let testData = null;
-        let messagesSent = 0;
-        let isReceiving = false;
-
-        function generateTestData(size) {
-            if (size > RENDERER_TO_NATIVE_SIZE) {
-                throw new Error('Test data size exceeds buffer size');
-            }
-            const data = new Uint8Array(size);
-            for (let i = 0; i < size; i++) {
-                data[i] = i % 256;
-            }
-            return data;
-        }
-
-        async function startTest() {
-            const messageSize = parseInt(document.getElementById('messageSize').value);
-            const duration = parseInt(document.getElementById('duration').value);
-            
-            if (messageSize > RENDERER_TO_NATIVE_SIZE) {
-                alert('Message size cannot exceed renderer-to-native buffer size');
-                return;
-            }
-
-            testData = generateTestData(messageSize);
-            testRunning = true;
-            messagesSent = 0;
-            
-            addon.startThroughputTest();
-            
-            // Start the test timer
-            setTimeout(() => {
-                stopTest();
-            }, duration * 1000);
-            
-            // Start sending messages
-            sendMessage();
-            updateStats();
-        }
-
-        function stopTest() {
-            testRunning = false;
-            const finalStats = addon.getThroughputStats();
-            document.getElementById('stats').innerHTML = `
-                <strong>Final Results:</strong><br>
-                Messages/sec: ${finalStats.messagesPerSecond.toFixed(2)}<br>
-                MB/sec: ${(finalStats.bytesPerSecond / (1024 * 1024)).toFixed(2)}<br>
-                Total Messages: ${finalStats.totalMessages}<br>
-                Total MB: ${(finalStats.totalBytes / (1024 * 1024)).toFixed(2)}<br>
-                Time: ${finalStats.seconds.toFixed(2)}s
-            `;
-        }
-
-        function sendMessage() {
-            if (!testRunning) return;
-            
-            // Try to send immediately if buffer is free
-            if (Atomics.load(control, 0) === 0) {
-                dataR2N.set(testData);
-                control[1] = testData.length;
-                Atomics.store(control, 0, 1);
-                messagesSent++;
+        class SharedMemoryChannel {
+            constructor(rendererToNativeSize = 1024, nativeToRendererSize = 1024) {
+                this.RENDERER_TO_NATIVE_SIZE = rendererToNativeSize;
+                this.NATIVE_TO_RENDERER_SIZE = nativeToRendererSize;
                 
-                // Wait for response
-                checkResponse();
-            } else {
-                // Buffer is busy, try again very soon
-                requestAnimationFrame(sendMessage);
+                // Create shared buffer with space for both directions plus control array (16 bytes)
+                this.sharedBuffer = new ArrayBuffer(16 + this.RENDERER_TO_NATIVE_SIZE + this.NATIVE_TO_RENDERER_SIZE);
+                
+                // Initialize the addon with the shared buffer and sizes
+                addon.setSharedBuffer(this.sharedBuffer, this.RENDERER_TO_NATIVE_SIZE, this.NATIVE_TO_RENDERER_SIZE);
+
+                // Control array layout (16 bytes total):
+                // [0] - R→N signal
+                // [1] - R→N length
+                // [2] - N→R message signal
+                // [3] - N→R message length
+                this.control = new Int32Array(this.sharedBuffer, 0, 16/(32/8));
+                
+                // Create views for the data regions
+                this.dataR2N = new Uint8Array(this.sharedBuffer, 16, this.RENDERER_TO_NATIVE_SIZE);
+                this.dataN2R = new Uint8Array(this.sharedBuffer, 16 + this.RENDERER_TO_NATIVE_SIZE, this.NATIVE_TO_RENDERER_SIZE);
+
+                this.messageQueue = [];
+                this.isProcessingQueue = false;
+                this.isReceiving = false;
+                this.encoder = new TextEncoder();
+                this.decoder = new TextDecoder();
+                this.onMessageCallback = null;
+
+
+                this.recv_fast_check_interval = 1;
+                this.recv_slow_check_interval = 10;
+            }
+
+            send(message) {
+                const messageBytes = this.encoder.encode(message);
+                
+                if (messageBytes.length > this.RENDERER_TO_NATIVE_SIZE) {
+                    throw new Error('Message too long');
+                }
+
+                this.messageQueue.push(messageBytes);
+
+                if (!this.isProcessingQueue) {
+                    this.isProcessingQueue = true;
+                    requestAnimationFrame(() => this._processSendQueue());
+                }
+            }
+
+            _processSendQueue() {
+                if (this.messageQueue.length === 0) {
+                    this.isProcessingQueue = false;
+                    return;
+                }
+
+                if (Atomics.load(this.control, 0) === 0) {
+                    let packOffset = 0;
+                    let pack_last_idx = -1;
+                    
+                    for (let i = 0; i < this.messageQueue.length; i++) {
+                        if (packOffset + this.messageQueue[i].length > this.dataR2N.length) {
+                            break;
+                        }
+                        this.dataR2N.set(this.messageQueue[i], packOffset);
+                        packOffset += this.messageQueue[i].length;
+                        pack_last_idx = i;
+                    }
+
+                    this.control[1] = packOffset;
+                    Atomics.store(this.control, 0, 1);
+                    this.messageQueue.splice(0, pack_last_idx + 1);
+                }
+
+                requestAnimationFrame(() => this._processSendQueue());
+            }
+
+            startReceiving(callback) {
+                this.onMessageCallback = callback;
+                this.isReceiving = true;
+                this._processReceiveQueue();
+            }
+
+            stopReceiving() {
+                this.isReceiving = false;
+            }
+
+            _processReceiveQueue() {
+                if (!this.isReceiving) return;
+
+                if (Atomics.load(this.control, 2) === 1) {
+                    const length = this.control[3];
+                    if (length <= this.NATIVE_TO_RENDERER_SIZE) {
+                        const data = this.dataN2R.slice(0, length);
+                        const message = this.decoder.decode(data);
+                        if (this.onMessageCallback) {
+                            this.onMessageCallback(message, data);
+                        }
+                    }
+                    Atomics.store(this.control, 2, 0);
+                    setTimeout(() => this._processReceiveQueue(), this.recv_fast_check_interval); // fast check
+                } else {
+                    setTimeout(() => this._processReceiveQueue(), this.recv_slow_check_interval); // slow check
+                }
+            }
+
+            cleanup() {
+                this.stopReceiving();
+                addon.cleanup();
             }
         }
 
-        function checkResponse() {
-            if (!testRunning) return;
+        // Example usage:
+        const channel = new SharedMemoryChannel();
+        
+        function queueMessage() {
+            const messageInput = document.getElementById('messageInput');
+            const message = messageInput.value;
+            if (!message) return;
             
-            if (Atomics.load(control, 2) === 1) {
-                Atomics.store(control, 2, 0);
-                // Send next message immediately
-                requestAnimationFrame(sendMessage);
-            } else {
-                // Check again very soon
-                requestAnimationFrame(checkResponse);
+            for (let i = 0; i < 10; i++) {
+                channel.send(message);
             }
+            updateQueueStatus();
+            // messageInput.value = '';
         }
 
         function startReceiving() {
             const interval = parseInt(document.getElementById('interval').value);
             addon.startSendingData(interval);
-            isReceiving = true;
-            startMessageCheck();
+            channel.startReceiving((message, rawData) => {
+                const messageLog = document.getElementById('messageLog');
+                const messageElement = document.createElement('div');
+                messageElement.className = 'message';
+                messageElement.textContent = `Received: ${message}`;
+                messageLog.appendChild(messageElement);
+            });
         }
 
         function stopReceiving() {
             addon.stopSendingData();
-            isReceiving = false;
+            channel.stopReceiving();
         }
 
-        function startMessageCheck() {
-            if (!isReceiving) return;
+        function updateQueueStatus() {
+            document.getElementById('queueStatus').textContent = `Queue: ${channel.messageQueue.length} messages`;
+        }
 
-            if (Atomics.load(control, 4) === 1) {
-                const length = control[5];
-                if (length <= NATIVE_TO_RENDERER_SIZE) {
-                    const decoder = new TextDecoder();
-                    let data=dataN2R.slice(0, length);
-                    const message = decoder.decode(data);
-                    console.log(data, length);
-                    const messageLog = document.getElementById('messageLog');
-                    const messageElement = document.createElement('div');
-                    messageElement.className = 'message';
-                    messageElement.textContent = message;
-                    messageLog.insertBefore(messageElement, messageLog.firstChild);
-                    
-                    while (messageLog.children.length > 100) {
-                        messageLog.removeChild(messageLog.lastChild);
-                    }
-                }
-                Atomics.store(control, 4, 0);
+        // Add keyboard shortcut for sending messages
+        document.getElementById('messageInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                queueMessage();
             }
-
-            setTimeout(startMessageCheck, 1);
-        }
-
-        function updateStats() {
-            if (!testRunning) return;
-            
-            const stats = addon.getThroughputStats();
-            document.getElementById('stats').innerHTML = `
-                <strong>Current Results:</strong><br>
-                Messages/sec: ${stats.messagesPerSecond.toFixed(2)}<br>
-                MB/sec: ${(stats.bytesPerSecond / (1024 * 1024)).toFixed(2)}<br>
-                Total Messages: ${stats.totalMessages}<br>
-                Total MB: ${(stats.totalBytes / (1024 * 1024)).toFixed(2)}<br>
-                Time: ${stats.seconds.toFixed(2)}s
-            `;
-            
-            if (testRunning) {
-                setTimeout(updateStats, 100); // Update every 100ms
-            }
-        }
+        });
 
         // Cleanup when window closes
         window.addEventListener('beforeunload', () => {
-            stopReceiving();
-            addon.cleanup();
+            channel.cleanup();
         });
     </script>
 </body>

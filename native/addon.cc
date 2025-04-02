@@ -6,9 +6,6 @@
 
 Napi::Reference<Napi::ArrayBuffer> sharedArrayBufferRef;
 std::atomic<bool> shouldRun{true};
-std::atomic<uint64_t> totalBytesProcessed{0};
-std::atomic<uint64_t> totalMessagesProcessed{0};
-std::chrono::high_resolution_clock::time_point startTime;
 
 // Add these global variables for native-to-renderer communication
 std::thread* nativeDataThread = nullptr;
@@ -21,17 +18,15 @@ std::atomic<int32_t>* control = nullptr;
 size_t r2nBufferSize = 0;
 size_t n2rBufferSize = 0;
 
-// Control array layout (24 bytes total):
+// Control array layout (16 bytes total):
 // [0] - R→N signal
 // [1] - R→N length
-// [2] - N→R echo signal
-// [3] - N→R echo length
-// [4] - N→R message signal
-// [5] - N→R message length
+// [2] - N→R message signal
+// [3] - N→R message length
 
 Napi::String Hello(const Napi::CallbackInfo& info) {
-  Napi::Env env = info.Env();
-  return Napi::String::New(env, "Hello from N-API! dd");
+    Napi::Env env = info.Env();
+    return Napi::String::New(env, "Hello from N-API! dd");
 }
 
 void ProcessMessage() {
@@ -46,15 +41,7 @@ void ProcessMessage() {
             if (length > 32) printf("...");
             printf(" (length: %zu)\n", length);
             
-            // Echo the message back
-            std::memcpy(dataN2R, dataR2N, length);
-            control[2] = 1;  // Set echo signal
-            control[3] = static_cast<int32_t>(length);  // Set echo length
             control[0] = 0;  // Reset R→N signal
-            
-            // Update throughput stats
-            totalBytesProcessed.fetch_add(length, std::memory_order_seq_cst);
-            totalMessagesProcessed.fetch_add(1, std::memory_order_seq_cst);
         }
     }
 }
@@ -79,7 +66,7 @@ void SendDataToRenderer() {
     while (shouldRun) {
         if (shouldSendData && control && dataN2R) {
             // Wait until renderer has processed previous message
-            while (control[4].load(std::memory_order_seq_cst) == 1) {
+            while (control[2].load(std::memory_order_seq_cst) == 1) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 if (!shouldRun) return;
             }
@@ -90,8 +77,8 @@ void SendDataToRenderer() {
             printf("message:%s, length:%d\n", message.c_str(), length);
             if (length <= n2rBufferSize) {  // Add size check
                 memcpy(dataN2R, message.c_str(), length);  // Removed r2nBufferSize offset
-                control[5].store(length, std::memory_order_seq_cst);
-                control[4].store(1, std::memory_order_seq_cst);
+                control[3].store(length, std::memory_order_seq_cst);
+                control[2].store(1, std::memory_order_seq_cst);
             }
 
             // Wait for specified interval
@@ -116,7 +103,7 @@ Napi::Value SetSharedBuffer(const Napi::CallbackInfo& info) {
 
     printf("r2nBufferSize: %d, n2rBufferSize: %d\n", r2nBufferSize, n2rBufferSize);
 
-    size_t totalSize = 24 + r2nBufferSize + n2rBufferSize; // 24 bytes for control
+    size_t totalSize = 16 + r2nBufferSize + n2rBufferSize; // 16 bytes for control
     if (sab.ByteLength() < totalSize) {
         Napi::TypeError::New(env, "Buffer too small for specified sizes").ThrowAsJavaScriptException();
         return env.Undefined();
@@ -127,7 +114,7 @@ Napi::Value SetSharedBuffer(const Napi::CallbackInfo& info) {
 
     void* base = sab.Data();
     control = reinterpret_cast<std::atomic<int32_t>*>(base);
-    dataR2N = reinterpret_cast<uint8_t*>((int8_t*)base + 24);
+    dataR2N = reinterpret_cast<uint8_t*>((int8_t*)base + 16);
     dataN2R = dataR2N + r2nBufferSize;
 
     if (nativeThread) {
@@ -163,31 +150,6 @@ Napi::Value Cleanup(const Napi::CallbackInfo& info) {
     return env.Undefined();
 }
 
-Napi::Value StartThroughputTest(const Napi::CallbackInfo& info) {
-    totalBytesProcessed.store(0, std::memory_order_seq_cst);
-    totalMessagesProcessed.store(0, std::memory_order_seq_cst);
-    startTime = std::chrono::high_resolution_clock::now();
-    return info.Env().Undefined();
-}
-
-Napi::Value GetThroughputStats(const Napi::CallbackInfo& info) {
-    Napi::Env env = info.Env();
-    auto now = std::chrono::high_resolution_clock::now();
-    double seconds = std::chrono::duration<double>(now - startTime).count();
-    
-    uint64_t bytes = totalBytesProcessed.load(std::memory_order_seq_cst);
-    uint64_t messages = totalMessagesProcessed.load(std::memory_order_seq_cst);
-    
-    Napi::Object stats = Napi::Object::New(env);
-    stats.Set("bytesPerSecond", Napi::Number::New(env, static_cast<double>(bytes) / seconds));
-    stats.Set("messagesPerSecond", Napi::Number::New(env, static_cast<double>(messages) / seconds));
-    stats.Set("totalBytes", Napi::Number::New(env, static_cast<double>(bytes)));
-    stats.Set("totalMessages", Napi::Number::New(env, static_cast<double>(messages)));
-    stats.Set("seconds", Napi::Number::New(env, seconds));
-    
-    return stats;
-}
-
 Napi::Value StartSendingData(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     
@@ -214,8 +176,6 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set("setSharedBuffer", Napi::Function::New(env, SetSharedBuffer));
     exports.Set("cleanup", Napi::Function::New(env, Cleanup));
     exports.Set("hello", Napi::Function::New(env, Hello));
-    exports.Set("startThroughputTest", Napi::Function::New(env, StartThroughputTest));
-    exports.Set("getThroughputStats", Napi::Function::New(env, GetThroughputStats));
     exports.Set("startSendingData", Napi::Function::New(env, StartSendingData));
     exports.Set("stopSendingData", Napi::Function::New(env, StopSendingData));
     return exports;
