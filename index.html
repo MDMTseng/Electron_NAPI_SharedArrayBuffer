@@ -84,6 +84,7 @@
     </div>
     <script>
         const addon = require('./build/Release/addon');
+        const Throttle = require('./throttle.js');
         let channel = null;
 
         class SharedMemoryChannel {
@@ -126,6 +127,10 @@
 
                 this.recv_fast_check_interval = 1;
                 this.recv_slow_check_interval = 10;
+                this.onMessageSentCallback = null;
+
+                // Initialize throttle for queue updates
+                this.queueUpdateThrottle = new Throttle(100); // Update UI at most every 100ms
             }
 
             send(message) {
@@ -168,6 +173,9 @@
                     this.control[1] = packOffset;
                     Atomics.store(this.control, 0, 1);
                     this.messageQueue.splice(0, pack_last_idx + 1);
+                    if (this.onMessageSentCallback) {
+                        this.onMessageSentCallback();
+                    }
                 }
 
                 if (this.isProcessingQueue) {
@@ -188,7 +196,7 @@
 
             _processReceiveQueue() {
                 if (!this.sharedBuffer || !this.isReceiving) return; // Guard against calls after cleanup
-
+                // 1 means remote has new data, so we need to receive it
                 if (Atomics.load(this.control, 2) === 1) {
                     const length = this.control[3];
                     if (length <= this.NATIVE_TO_RENDERER_SIZE) {
@@ -198,6 +206,7 @@
                             this.onMessageCallback(message, data);
                         }
                     }
+                    //receive signal set to 0 means ready to receive another message
                     Atomics.store(this.control, 2, 0);
                     if (this.isReceiving) {
                         setTimeout(() => this._processReceiveQueue(), this.recv_fast_check_interval);
@@ -212,6 +221,9 @@
                 this.isProcessingQueue = false;
                 this.messageQueue = [];
                 this.onMessageCallback = null;
+                if (this.queueUpdateThrottle) {
+                    this.queueUpdateThrottle.cancel();
+                }
                 addon.cleanup();
                 
                 // Clear buffer references
@@ -228,6 +240,12 @@
                 channel.cleanup();
             }
             channel = new SharedMemoryChannel();
+            channel.onMessageSentCallback = () => {
+                // Use the throttle utility to update queue status
+                channel.queueUpdateThrottle.schedule(() => {
+                updateQueueStatus();
+                });
+            }
         }
 
         // Initialize on page load

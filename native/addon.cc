@@ -196,12 +196,18 @@ private:
     }
 
     void nativeThreadFunc() {
+        int wait_time = 1;
         while (shouldRun) {
             // Wait for Renderer → Native
             while (control && control[0].load(std::memory_order_seq_cst) != 1) {
-                std::this_thread::sleep_for(std::chrono::microseconds(1));
+                std::this_thread::sleep_for(std::chrono::microseconds(wait_time));
+                wait_time++;
+                if(wait_time > 1000) {
+                    wait_time = 1000;
+                }
                 if (!shouldRun) return;
             }
+            wait_time = 1;
 
             if (!control) continue;
             processMessage();
@@ -210,13 +216,19 @@ private:
 
     void sendDataThreadFunc() {
         int send_count = 0;
+        int wait_time = 1;
         while (shouldRun) {
             if (shouldSendData && control && dataN2R) {
                 // Wait until renderer has processed previous message
                 while (control[2].load(std::memory_order_seq_cst) == 1) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    std::this_thread::sleep_for(std::chrono::microseconds(wait_time));
+                    wait_time++;
+                    if(wait_time > 1000) {
+                        wait_time = 1000;
+                    }
                     if (!shouldRun) return;
                 }
+                wait_time=1;
 
                 // Generate some test data
                 std::string message = std::to_string(send_count++);
