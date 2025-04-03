@@ -1,6 +1,6 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
-
+const nativeAddon = require('./build/Release/addon.node');
 try {
   if (process.env.NODE_ENV === 'development') {
     require('electron-reloader')(module, {
@@ -17,6 +17,7 @@ function createWindow() {
     width: 800,
     height: 600,
     webPreferences: {
+      // preload: path.join(__dirname, 'electron/preload.js'),
       nodeIntegration: true,
       contextIsolation: false
     }
@@ -39,6 +40,12 @@ function createWindow() {
       console.error('Error loading file:', error);
       return { success: false, error: error.message };
     }
+  });
+
+
+
+  ipcMain.handle('get_native_api', async (event, filePath) => {
+    return nativeAddon;
   });
 }
 

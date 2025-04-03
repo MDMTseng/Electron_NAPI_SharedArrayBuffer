@@ -2,21 +2,32 @@
   "name": "electron-napi-addon",
   "version": "1.0.0",
   "description": "Simple Electron app with N-API addon World",
-  "main": "main.js",
+  "main": "electron/main.js",
   "scripts": {
-    "start": "electron .",
-    "install": "node-gyp rebuild",
-    "build": "node-gyp rebuild",
-
-    "build_start": "node-gyp rebuild&&electron ."
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "electron:dev": "node-gyp rebuild && concurrently \"vite\" \"electron .\"",
+    "electron:build": "vite build && electron-builder",
+    "rebuild": "node-gyp rebuild",
+    "postinstall": "electron-builder install-app-deps && node-gyp rebuild"
   },
   "dependencies": {
     "bindings": "^1.5.0",
-    "node-addon-api": "^7.1.1"
+    "node-addon-api": "^7.1.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
   },
   "devDependencies": {
+    "@types/react": "^18.2.56",
+    "@types/react-dom": "^18.2.19",
+    "@vitejs/plugin-react": "^4.2.1",
+    "concurrently": "^8.2.2",
     "electron": "^29.1.0",
+    "electron-builder": "^24.9.1",
     "node-api-headers": "^1.5.0",
-    "node-gyp": "^10.0.1"
+    "node-gyp": "^10.0.1",
+    "typescript": "^5.2.2",
+    "vite": "^5.1.4"
   }
 }

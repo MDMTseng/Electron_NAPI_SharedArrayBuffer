@@ -1,18 +1,23 @@
-class Throttle {
+export class Throttle {
+    private delay: number;
+    private timer: NodeJS.Timeout | null;
+    private lastRun: number;
+    private queued: boolean;
+
     constructor(delay = 100) {
         this.delay = delay;
         this.timer = null;
         this.lastRun = 0;
         this.queued = false;
     }
-    
+
     /**
      * Schedule a function to be executed
-     * @param {Function} fn The function to throttle
-     * @param {boolean} [immediate=false] Whether to run immediately if possible
-     * @returns {Promise<void>} A promise that resolves when the function executes
+     * @param fn The function to throttle
+     * @param immediate Whether to run immediately if possible
+     * @returns A promise that resolves when the function executes
      */
-    schedule(fn, immediate = false) {
+    schedule(fn: () => void, immediate = false): Promise<void> {
         return new Promise((resolve) => {
             const now = Date.now();
             const timeSinceLastRun = now - this.lastRun;
@@ -44,7 +49,7 @@ class Throttle {
     /**
      * Cancel any pending execution
      */
-    cancel() {
+    cancel(): void {
         if (this.timer) {
             clearTimeout(this.timer);
             this.timer = null;
@@ -53,33 +58,25 @@ class Throttle {
 
     /**
      * Change the delay time
-     * @param {number} newDelay New delay in milliseconds
+     * @param newDelay New delay in milliseconds
      */
-    setDelay(newDelay) {
+    setDelay(newDelay: number): void {
         this.delay = newDelay;
     }
 
     /**
      * Check if there's a pending execution
-     * @returns {boolean}
      */
-    isPending() {
+    isPending(): boolean {
         return this.timer !== null;
     }
 
     /**
      * Get time until next possible execution
-     * @returns {number} Milliseconds until next possible execution
+     * @returns Milliseconds until next possible execution
      */
-    getTimeUntilNextRun() {
+    getTimeUntilNextRun(): number {
         const timeSinceLastRun = Date.now() - this.lastRun;
         return Math.max(0, this.delay - timeSinceLastRun);
     }
-}
-
-// Export for both CommonJS and ES modules
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = Throttle;
-} else {
-    window.Throttle = Throttle;
 } 
