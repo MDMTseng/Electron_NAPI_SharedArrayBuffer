@@ -29,7 +29,7 @@ function App() {
     }
     let size=500*1024*1024;
     const newChannel = new SharedMemoryChannel(size, size);
-    newChannel.onMessageSentCallback = () => {
+    newChannel.onMessageQueueEmptyCallback = () => {
       _this.sentCounter++;
       newChannel.queueUpdateThrottle.schedule(() => {
         updateQueueStatus(newChannel);
@@ -38,7 +38,7 @@ function App() {
           let duration = now - _this.startTime;
           let size_MB=_this.totalSize / 1024/1024;
           let speed =1000*size_MB / duration;
-          let status=`sentCounter:${_this.sentCounter} Size: ${size_MB.toFixed(2)} MB, Duration: ${duration} ms, Speed: ${speed.toFixed(2)} MB/s`;
+          let status=`SendCount:${_this.sentCounter} ${size_MB.toFixed(2)} MB,${duration} ms,${speed.toFixed(2)} MB/s`;
           setSpeedTestStatus(status);
           console.log(status);
         }

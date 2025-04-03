@@ -15,10 +15,10 @@ export class SharedMemoryChannel {
     private onMessageCallback: ((message: string, rawData: Uint8Array) => void) | null;
     private recv_fast_check_interval: number;
     private recv_slow_check_interval: number;
-
+    private binded_processSendQueue: () => void;
     // Make these public so they can be accessed by the React component
     public messageQueue: Uint8Array[];
-    public onMessageSentCallback: (() => void) | null;
+    public onMessageQueueEmptyCallback: (() => void) | null;
     public queueUpdateThrottle: Throttle;
 
     constructor(rendererToNativeSize = 1024, nativeToRendererSize = 1024) {
@@ -32,13 +32,16 @@ export class SharedMemoryChannel {
         this.onMessageCallback = null;
         this.recv_fast_check_interval = 1;
         this.recv_slow_check_interval = 10;
-        this.onMessageSentCallback = null;
+        this.onMessageQueueEmptyCallback = null;
         this.queueUpdateThrottle = new Throttle(100);
         this.sharedBuffer = null;
         this.control = null;
         this.dataR2N = null;
         this.dataN2R = null;
         this.initialize();
+
+
+        this.binded_processSendQueue=this._processSendQueue.bind(this);
     }
 
     private initialize() {
@@ -79,7 +82,8 @@ export class SharedMemoryChannel {
 
         if (!this.isProcessingQueue) {
             this.isProcessingQueue = true;
-            requestAnimationFrame(() => this._processSendQueue());
+            // requestAnimationFrame(() => this._processSendQueue());
+            setTimeout(this.binded_processSendQueue,0)
         }
     }
 
@@ -90,8 +94,11 @@ export class SharedMemoryChannel {
             this.isProcessingQueue = false;
             return;
         }
-
-        if (Atomics.load(this.control!, 0) === 0) {
+        if(Atomics.load(this.control!, 0) !== 0)
+        {
+            setTimeout(this.binded_processSendQueue,0)
+        }
+        {
             let packOffset = 0;
             let pack_last_idx = -1;
             
@@ -107,13 +114,18 @@ export class SharedMemoryChannel {
             this.control![1] = packOffset;
             Atomics.store(this.control!, 0, 1);
             this.messageQueue.splice(0, pack_last_idx + 1);
-            if (this.onMessageSentCallback) {
-                this.onMessageSentCallback();
-            }
+
         }
 
+        if(this.messageQueue.length==0)
+        {
+            if (this.onMessageQueueEmptyCallback) {
+                this.onMessageQueueEmptyCallback();
+            }
+            this.isProcessingQueue = false;
+        }
         if (this.isProcessingQueue) {
-            requestAnimationFrame(() => this._processSendQueue());
+            setTimeout(this.binded_processSendQueue,0)
         }
     }
 
