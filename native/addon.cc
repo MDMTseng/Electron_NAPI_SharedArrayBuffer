@@ -124,6 +124,7 @@ public:
         nativeThread = new std::thread(&SharedMemoryChannel::nativeThreadFunc, this);
         sendingThread = new std::thread(&SharedMemoryChannel::sendingThreadFunc, this);
 
+        // startSendingData(0);
     }
 
     void cleanup() {
@@ -231,7 +232,6 @@ private:
 
     void sendingThreadFunc() {
         std::vector<uint8_t> data;
-        int wait_time = 1;
         bool should_continue = true;
 
         while (shouldRun) {
@@ -239,8 +239,11 @@ private:
             
             if (shouldSendData && control && dataN2R) {
                 // Try to get data from the queue
+                printf("q size: %zu  should_continue: %d\n", sendQueue.size(), should_continue);
                 if (sendQueue.wait_and_pop(data, should_continue)) {
                     // Wait until renderer has processed previous message
+
+                    int wait_time = 1;//busy wait
                     while (control[2].load(std::memory_order_seq_cst) == 1) {
                         std::this_thread::sleep_for(std::chrono::microseconds(wait_time));
                         wait_time++;
@@ -249,7 +252,6 @@ private:
                         }
                         if (!shouldRun) return;
                     }
-                    wait_time = 1;
 
                     // Send the data
                     if (data.size() <= n2rBufferSize) {
@@ -337,8 +339,8 @@ Napi::Value StartSendingData(const Napi::CallbackInfo& info) {
     if (info.Length() > 0 && info[0].IsNumber()) {
         interval = info[0].As<Napi::Number>().Uint32Value();
     }
-
-    channel.startSendingData(0);
+    printf("interval: %d\n", interval);
+    channel.startSendingData(interval);
     return env.Undefined();
 }
 

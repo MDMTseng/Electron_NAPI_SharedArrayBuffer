@@ -8,13 +8,14 @@ function App() {
   const [channel, setChannel] = useState<SharedMemoryChannel | null>(null);
   const [messages, setMessages] = useState<string[]>([]);
   const [queueStatus, setQueueStatus] = useState('Queue: 0 messages');
-  const [interval, setInterval] = useState(1000);
   const [pluginStatus, setPluginStatus] = useState<string>('No plugin loaded');
 
   const [speedTest_sendCount, setSpeedTest_sendCount] = useState<number>(1);
   const [speedTestStatus, setSpeedTestStatus] = useState<string>('Not started');
   useEffect(() => {
     initializeChannel();
+    loadPlugin();
+   
     return () => {
       if (channel) {
         channel.cleanup();
@@ -23,6 +24,7 @@ function App() {
   }, []);
 
 
+  _this.setMessages=setMessages;
   const initializeChannel = () => {
     if (channel) {
       channel.cleanup();
@@ -46,6 +48,19 @@ function App() {
       });
     };
     setChannel(newChannel);
+
+    // nativeAddon.startSendingData(interval*0);
+
+    // setTimeout(() => {
+    //   newChannel.startReceiving((message: string) => {
+    //     console.log("Received: ", message);
+    //     _this.setMessages((prev:string[]) =>{
+    //       return [...prev, `Received: ${message}`];
+    //     });
+    //   });
+    // }, 5000);
+
+
   };
 
   const updateQueueStatus = (currentChannel: SharedMemoryChannel) => {
@@ -73,7 +88,7 @@ function App() {
 
   const startReceiving = () => {
     if (!channel) return;
-    nativeAddon.startSendingData(interval);
+    nativeAddon.startSendingData(0);
     channel.startReceiving((message: string) => {
       setMessages(prev => [...prev, `Received: ${message}`]);
     });
@@ -137,13 +152,6 @@ function App() {
       </div>
       <div className="queue-status">{queueStatus}- {speedTestStatus}</div>
       <div className="controls">
-        <input
-          type="number"
-          value={interval}
-          onChange={(e) => setInterval(Number(e.target.value))}
-          min={100}
-          max={10000}
-        /> ms interval
         <button onClick={startReceiving}>Start Receiving</button>
         <button onClick={stopReceiving}>Stop Receiving</button>
         <button onClick={triggerNativeCallback}>Trigger Native Callback</button>
