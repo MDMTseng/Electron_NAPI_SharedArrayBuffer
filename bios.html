@@ -267,7 +267,7 @@
             <div id="fileOptions">
                 <div class="menu-item" onclick="selectDefaultPath()">
                     <span>Default WebUI Path</span>
-                    <span>./WebUI/dist/index.html</span>
+                    <span>./index.html</span>
                 </div>
                 
                 <div class="menu-item">
@@ -310,7 +310,7 @@
     </div>
 
     <script>
-        let selectedPath = './WebUI/dist/index.html';
+        let selectedPath = './index.html';
         let selectedUrl = '';
         let isUrlMode = false;
 
@@ -319,11 +319,11 @@
             try {
                 const settings = JSON.parse(localStorage.getItem('webuiSettings')) || {};
                 isUrlMode = settings.isUrlMode || false;
-                selectedPath = settings.selectedPath || './WebUI/dist/index.html';
+                selectedPath = settings.selectedPath || './index.html';
                 selectedUrl = settings.selectedUrl || '';
 
                 document.getElementById('loadType').value = isUrlMode ? 'url' : 'file';
-                document.getElementById('pathInput').value = selectedPath !== './WebUI/dist/index.html' ? selectedPath : '';
+                document.getElementById('pathInput').value = selectedPath !== './index.html' ? selectedPath : '';
                 document.getElementById('urlInput').value = selectedUrl;
                 
                 toggleLoadType();
@@ -353,7 +353,7 @@
         }
 
         function selectDefaultPath() {
-            selectedPath = './WebUI/dist/index.html';
+            selectedPath = './index.html';
             document.getElementById('pathInput').value = '';
             showStatus('Default path selected');
             saveSettings();
