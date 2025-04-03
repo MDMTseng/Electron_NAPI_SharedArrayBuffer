@@ -32,6 +32,8 @@ try {
         stopSendingData: () => console.log('Mock: stopSendingData called'),
         triggerTestCallback: () => console.log('Mock: triggerTestCallback called'),
         cleanup: () => console.log('Mock: cleanup called'),
+        loadPlugin: () => console.log('Mock: loadPlugin called'),
+        unloadPlugin: () => console.log('Mock: unloadPlugin called'),
     };
 }
 
@@ -52,4 +54,8 @@ export const nativeAddon = {
     triggerTestCallback: () => addon.triggerTestCallback(),
 
     cleanup: () => addon.cleanup(),
+
+    loadPlugin: (pluginPath: string) => addon.loadPlugin(pluginPath),
+
+    unloadPlugin: () => addon.unloadPlugin(),
 }; 

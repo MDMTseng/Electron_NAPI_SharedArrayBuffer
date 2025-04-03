@@ -5,18 +5,19 @@
 #include <cstring>
 #include <vector>
 #include <functional>
+#include "plugin_loader.h"
+#include "thread_safe_queue.h"
 
 // Forward declare our async helper
 void schedule_async_callback(Napi::Env env, std::function<void()> callback);
 
-
+// Global plugin loader instance
+PluginLoader g_plugin_loader;
 
 Napi::FunctionReference messageCallback;
 void setMessageCallback(const Napi::Function& callback) {
     messageCallback = Napi::Persistent(callback);
 }
-
-
 
 Napi::Value SetMessageCallback(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
@@ -29,7 +30,6 @@ Napi::Value SetMessageCallback(const Napi::CallbackInfo& info) {
     setMessageCallback(info[0].As<Napi::Function>());
     return env.Undefined();
 }
-
 
 // Helper function to execute callbacks in the Node.js event loop
 void schedule_async_callback(Napi::Env env, std::function<void()> callback) {
@@ -61,13 +61,14 @@ void schedule_async_callback(Napi::Env env, std::function<void()> callback) {
     napi_queue_async_work(env, async_data->work);
 }
 
-
-
-void triggerCallback(std::vector<uint8_t>& data) {
+// Callback from plugin to Node.js
+void plugin_message_callback(const uint8_t* data, size_t length) {
     if (!messageCallback.IsEmpty()) {
         // Create a copy of the data for the callback
+        std::vector<uint8_t> data_copy(data, data + length);
+        
         // Create a function to execute the callback in the JavaScript thread
-        auto callback = [data = std::move(data)]() {
+        auto callback = [data = std::move(data_copy)]() {
             Napi::HandleScope scope(messageCallback.Env());
             
             // Create a Node.js Buffer containing our data
@@ -86,17 +87,17 @@ void triggerCallback(std::vector<uint8_t>& data) {
     }
 }
 
+
 class SharedMemoryChannel {
 public:
-    SharedMemoryChannel() : shouldRun(true), shouldSendData(false), sendInterval(1000),
-        nativeThread(nullptr), nativeDataThread(nullptr),
+    SharedMemoryChannel() : shouldRun(true), shouldSendData(true), sendInterval(1000),
+        nativeThread(nullptr), sendingThread(nullptr),
         control(nullptr), dataR2N(nullptr), dataN2R(nullptr),
         r2nBufferSize(0), n2rBufferSize(0) {}
 
     ~SharedMemoryChannel() {
         cleanup();
     }
-
 
     void initialize(Napi::ArrayBuffer& sab, size_t r2nSize, size_t n2rSize) {
         cleanup(); // Cleanup existing resources first
@@ -118,13 +119,16 @@ public:
             control[i].store(0, std::memory_order_seq_cst);
         }
 
-        // Start new native thread
+        // Start threads
         shouldRun = true;
         nativeThread = new std::thread(&SharedMemoryChannel::nativeThreadFunc, this);
+        sendingThread = new std::thread(&SharedMemoryChannel::sendingThreadFunc, this);
+
     }
 
     void cleanup() {
-        // Stop all running threads
+        // Clear the sending queue and stop all threads
+        sendQueue.clear();
         shouldSendData = false;
         shouldRun = false;
 
@@ -135,11 +139,11 @@ public:
             nativeThread = nullptr;
         }
 
-        // Cleanup data sending thread
-        if (nativeDataThread) {
-            nativeDataThread->join();
-            delete nativeDataThread;
-            nativeDataThread = nullptr;
+        // Cleanup sending thread
+        if (sendingThread) {
+            sendingThread->join();
+            delete sendingThread;
+            sendingThread = nullptr;
         }
 
         // Reset pointers
@@ -165,30 +169,36 @@ public:
     void startSendingData(uint32_t interval) {
         sendInterval = interval;
         shouldSendData = true;
-        
-        // Start the sending thread if not already running
-        if (!nativeDataThread) {
-            nativeDataThread = new std::thread(&SharedMemoryChannel::sendDataThreadFunc, this);
-        }
     }
 
     void stopSendingData() {
         shouldSendData = false;
     }
 
+    // New method to queue data for sending
+    void queueData(const std::vector<uint8_t>& data) {
+        if (shouldSendData && data.size() <= n2rBufferSize) {
+            sendQueue.push(data);
+        }
+    }
 
 private:
     void processMessage() {
         if (control[0] == 1) {
             size_t length = static_cast<size_t>(control[1]);
             if (length > 0 && length <= r2nBufferSize) {
-                // Print received data
-                printf("Data from renderer: ");
-                for (size_t i = 0; i < length && i < 32; i++) {
-                    printf("%02x ", dataR2N[i]);
+                // Forward to plugin if loaded
+                if (g_plugin_loader.is_loaded()) {
+                    g_plugin_loader.process_message(dataR2N, length);
+                } else {
+                    // Original message handling
+                    printf("Data from renderer: ");
+                    for (size_t i = 0; i < length && i < 32; i++) {
+                        printf("%02x ", dataR2N[i]);
+                    }
+                    if (length > 32) printf("...");
+                    printf(" (length: %zu)\n", length);
                 }
-                if (length > 32) printf("...");
-                printf(" (length: %zu)\n", length);
                 
                 control[0] = 0;  // Reset R→N signal
             }
@@ -198,6 +208,11 @@ private:
     void nativeThreadFunc() {
         int wait_time = 1;
         while (shouldRun) {
+            // Update plugin if loaded
+            if (g_plugin_loader.is_loaded()) {
+                g_plugin_loader.update();
+            }
+
             // Wait for Renderer → Native
             while (control && control[0].load(std::memory_order_seq_cst) != 1) {
                 std::this_thread::sleep_for(std::chrono::microseconds(wait_time));
@@ -214,35 +229,40 @@ private:
         }
     }
 
-    void sendDataThreadFunc() {
-        int send_count = 0;
+    void sendingThreadFunc() {
+        std::vector<uint8_t> data;
         int wait_time = 1;
+        bool should_continue = true;
+
         while (shouldRun) {
+            should_continue = shouldRun.load(std::memory_order_seq_cst);
+            
             if (shouldSendData && control && dataN2R) {
-                // Wait until renderer has processed previous message
-                while (control[2].load(std::memory_order_seq_cst) == 1) {
-                    std::this_thread::sleep_for(std::chrono::microseconds(wait_time));
-                    wait_time++;
-                    if(wait_time > 1000) {
-                        wait_time = 1000;
+                // Try to get data from the queue
+                if (sendQueue.wait_and_pop(data, should_continue)) {
+                    // Wait until renderer has processed previous message
+                    while (control[2].load(std::memory_order_seq_cst) == 1) {
+                        std::this_thread::sleep_for(std::chrono::microseconds(wait_time));
+                        wait_time++;
+                        if(wait_time > 1000) {
+                            wait_time = 1000;
+                        }
+                        if (!shouldRun) return;
                     }
-                    if (!shouldRun) return;
-                }
-                wait_time=1;
+                    wait_time = 1;
 
-                // Generate some test data
-                std::string message = std::to_string(send_count++);
-                size_t length = message.size();
-                printf("message:%s, length:%zu\n", message.c_str(), length);
-                
-                if (length <= n2rBufferSize) {
-                    memcpy(dataN2R, message.c_str(), length);
-                    control[3].store(length, std::memory_order_seq_cst);
-                    control[2].store(1, std::memory_order_seq_cst);
-                }
+                    // Send the data
+                    if (data.size() <= n2rBufferSize) {
+                        memcpy(dataN2R, data.data(), data.size());
+                        control[3].store(data.size(), std::memory_order_seq_cst);
+                        control[2].store(1, std::memory_order_seq_cst);
+                    }
 
-                // Wait for specified interval
-                std::this_thread::sleep_for(std::chrono::milliseconds(sendInterval));
+                    // Optional delay between sends
+                    if (sendInterval > 0) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(sendInterval));
+                    }
+                }
             } else {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
@@ -254,7 +274,7 @@ private:
     uint32_t sendInterval;
 
     std::thread* nativeThread;
-    std::thread* nativeDataThread;
+    std::thread* sendingThread;  // Renamed from nativeDataThread
 
     Napi::Reference<Napi::ArrayBuffer> sharedArrayBufferRef;
     std::atomic<int32_t>* control;
@@ -262,10 +282,19 @@ private:
     uint8_t* dataN2R;
     size_t r2nBufferSize;
     size_t n2rBufferSize;
+
+    ThreadSafeQueue<std::vector<uint8_t>> sendQueue;  // Queue for sending data
 };
 
 // Global instance of SharedMemoryChannel
 SharedMemoryChannel channel;
+
+
+void plugin_message_to_queue(const uint8_t* data, size_t length) {
+    std::vector<uint8_t> data_copy(data, data + length);
+    channel.queueData(data_copy);
+}
+
 
 Napi::String Hello(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
@@ -296,7 +325,6 @@ Napi::Value SetSharedBuffer(const Napi::CallbackInfo& info) {
     return env.Undefined();
 }
 
-
 Napi::Value Cleanup(const Napi::CallbackInfo& info) {
     channel.cleanup();
     return info.Env().Undefined();
@@ -310,7 +338,7 @@ Napi::Value StartSendingData(const Napi::CallbackInfo& info) {
         interval = info[0].As<Napi::Number>().Uint32Value();
     }
 
-    channel.startSendingData(interval);
+    channel.startSendingData(0);
     return env.Undefined();
 }
 
@@ -324,9 +352,43 @@ Napi::Value TriggerTestCallback(const Napi::CallbackInfo& info) {
     
     std::string testMessage = "Test callback from native code!";
     std::vector<uint8_t> testMessageVector(testMessage.begin(), testMessage.end());
-    triggerCallback(testMessageVector);
+    
+    int length = testMessageVector.size();
+    printf("length: %d\n",length);
+    // Queue the test message for sending
+    channel.queueData(testMessageVector);
+    // printf("q size: %zu, length: %d\n", channel.sendQueue.size(), length);
     
     return env.Undefined();
+}
+
+// New function to load a plugin
+Napi::Value LoadPlugin(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    
+    if (info.Length() < 1 || !info[0].IsString()) {
+        Napi::TypeError::New(env, "Expected plugin path argument").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    std::string plugin_path = info[0].As<Napi::String>().Utf8Value();
+    
+    bool success = g_plugin_loader.load(plugin_path);
+    if (success) {
+        // Initialize the plugin with our callback
+        const PluginInterface* interface = g_plugin_loader.get_interface();
+        if (interface) {
+            interface->initialize(plugin_message_to_queue);
+        }
+    }
+    
+    return Napi::Boolean::New(env, success);
+}
+
+// New function to unload the current plugin
+Napi::Value UnloadPlugin(const Napi::CallbackInfo& info) {
+    g_plugin_loader.unload();
+    return info.Env().Undefined();
 }
 
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
@@ -337,6 +399,8 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set("stopSendingData", Napi::Function::New(env, StopSendingData));
     exports.Set("setMessageCallback", Napi::Function::New(env, SetMessageCallback));
     exports.Set("triggerTestCallback", Napi::Function::New(env, TriggerTestCallback));
+    exports.Set("loadPlugin", Napi::Function::New(env, LoadPlugin));
+    exports.Set("unloadPlugin", Napi::Function::New(env, UnloadPlugin));
     return exports;
 }
 

@@ -9,7 +9,7 @@ function App() {
   const [messages, setMessages] = useState<string[]>([]);
   const [queueStatus, setQueueStatus] = useState('Queue: 0 messages');
   const [interval, setInterval] = useState(1000);
-
+  const [pluginStatus, setPluginStatus] = useState<string>('No plugin loaded');
 
   const [speedTest_sendCount, setSpeedTest_sendCount] = useState<number>(1);
   const [speedTestStatus, setSpeedTestStatus] = useState<string>('Not started');
@@ -89,6 +89,30 @@ function App() {
     nativeAddon.triggerTestCallback();
   };
 
+  const loadPlugin = () => {
+    // Get the plugin path based on the platform
+    const platform = process.platform;
+    const pluginExt = platform === 'win32' ? '.dll' : platform === 'darwin' ? '.dylib' : '.so';
+    const pluginPrefix = platform === 'win32' ? '' : 'lib';
+    const pluginPath = `${process.cwd()}/native/plugins/build/lib/${pluginPrefix}sample_plugin${pluginExt}`;
+    
+    try {
+      const success = nativeAddon.loadPlugin(pluginPath);
+      setPluginStatus(success ? 'Plugin loaded successfully' : 'Failed to load plugin');
+    } catch (error) {
+      setPluginStatus(`Error loading plugin: ${error}`);
+    }
+  };
+
+  const unloadPlugin = () => {
+    try {
+      nativeAddon.unloadPlugin();
+      setPluginStatus('Plugin unloaded');
+    } catch (error) {
+      setPluginStatus(`Error unloading plugin: ${error}`);
+    }
+  };
+
   return (
     <div className="container">
       <div className="send-controls">
@@ -123,6 +147,11 @@ function App() {
         <button onClick={startReceiving}>Start Receiving</button>
         <button onClick={stopReceiving}>Stop Receiving</button>
         <button onClick={triggerNativeCallback}>Trigger Native Callback</button>
+      </div>
+      <div className="plugin-controls">
+        <button onClick={loadPlugin}>Load Plugin</button>
+        <button onClick={unloadPlugin}>Unload Plugin</button>
+        <span className="plugin-status">{pluginStatus}</span>
       </div>
       <div className="message-log">
         {messages.map((message, index) => (
