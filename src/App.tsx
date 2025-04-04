@@ -48,19 +48,10 @@ function App() {
       });
     };
     setChannel(newChannel);
-
-    // nativeAddon.startSendingData(interval*0);
-
-    // setTimeout(() => {
-    //   newChannel.startReceiving((message: string) => {
-    //     console.log("Received: ", message);
-    //     _this.setMessages((prev:string[]) =>{
-    //       return [...prev, `Received: ${message}`];
-    //     });
-    //   });
-    // }, 5000);
-
-
+    nativeAddon.startSendingData(0);
+    newChannel.startReceiving((message: string) => {
+      setMessages(prev => [...prev, `Received: ${message}`]);
+    });
   };
 
   const updateQueueStatus = (currentChannel: SharedMemoryChannel) => {

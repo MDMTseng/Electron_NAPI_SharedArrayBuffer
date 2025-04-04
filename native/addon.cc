@@ -90,8 +90,8 @@ void plugin_message_callback(const uint8_t* data, size_t length) {
 
 class SharedMemoryChannel {
 public:
-    SharedMemoryChannel() : shouldRun(true), shouldSendData(true), sendInterval(1000),
-        nativeThread(nullptr), sendingThread(nullptr),
+    SharedMemoryChannel() : shouldRun(true), shouldSendData(true),
+        recvThread(nullptr), sendingThread(nullptr),
         control(nullptr), dataR2N(nullptr), dataN2R(nullptr),
         r2nBufferSize(0), n2rBufferSize(0) {}
 
@@ -121,23 +121,27 @@ public:
 
         // Start threads
         shouldRun = true;
-        nativeThread = new std::thread(&SharedMemoryChannel::nativeThreadFunc, this);
+        recvThread = new std::thread(&SharedMemoryChannel::recvThreadFunc, this);
         sendingThread = new std::thread(&SharedMemoryChannel::sendingThreadFunc, this);
 
-        // startSendingData(0);
     }
 
     void cleanup() {
-        // Clear the sending queue and stop all threads
-        sendQueue.clear();
-        shouldSendData = false;
+        stopSendingData();
+        // First stop all threads by setting shouldRun to false
+        // This will interrupt wait_and_pop in the sending thread
         shouldRun = false;
+        
+        // Clear the sending queue and stop sending
+        sendQueue.clear();
+        
+        shouldSendData = false;
 
         // Cleanup native thread
-        if (nativeThread) {
-            nativeThread->join();
-            delete nativeThread;
-            nativeThread = nullptr;
+        if (recvThread) {
+            recvThread->join();
+            delete recvThread;
+            recvThread = nullptr;
         }
 
         // Cleanup sending thread
@@ -165,15 +169,20 @@ public:
         if (!messageCallback.IsEmpty()) {
             messageCallback.Reset();
         }
+
+        startSendingData();
     }
 
-    void startSendingData(uint32_t interval) {
-        sendInterval = interval;
+    void startSendingData() {
         shouldSendData = true;
+        printf("startSendingData\n");
+        sendQueue.reset_interrupt();
     }
 
     void stopSendingData() {
         shouldSendData = false;
+        sendQueue.interrupt();
+        printf("stopSendingData\n");
     }
 
     // New method to queue data for sending
@@ -206,14 +215,14 @@ private:
         }
     }
 
-    void nativeThreadFunc() {
-        int wait_time = 1;
+    void recvThreadFunc() {
         while (shouldRun) {
             // Update plugin if loaded
             if (g_plugin_loader.is_loaded()) {
                 g_plugin_loader.update();
             }
 
+            int wait_time = 1;
             // Wait for Renderer → Native
             while (control && control[0].load(std::memory_order_seq_cst) != 1) {
                 std::this_thread::sleep_for(std::chrono::microseconds(wait_time));
@@ -223,7 +232,6 @@ private:
                 }
                 if (!shouldRun) return;
             }
-            wait_time = 1;
 
             if (!control) continue;
             processMessage();
@@ -233,25 +241,28 @@ private:
     void sendingThreadFunc() {
         std::vector<uint8_t> data;
         bool should_continue = true;
-
+        int runCount=0;
         while (shouldRun) {
             should_continue = shouldRun.load(std::memory_order_seq_cst);
             
+            if(runCount%10==0)
+                printf(">>>>runCount:%d",runCount);
+            runCount++;
             if (shouldSendData && control && dataN2R) {
                 // Try to get data from the queue
-                printf("q size: %zu  should_continue: %d\n", sendQueue.size(), should_continue);
-                if (sendQueue.wait_and_pop(data, should_continue)) {
+                printf("q size: %zu  sendQueue.is_interrupted(): %d\n", sendQueue.size(), sendQueue.is_interrupted());
+                bool is_new_data = sendQueue.wait_and_pop(data, should_continue);
+                if (is_new_data) {
                     // Wait until renderer has processed previous message
 
-                    int wait_time = 1;//busy wait
-                    while (control[2].load(std::memory_order_seq_cst) == 1) {
-                        std::this_thread::sleep_for(std::chrono::microseconds(wait_time));
-                        wait_time++;
-                        if(wait_time > 1000) {
-                            wait_time = 1000;
-                        }
+                    int waitForRemoteReady = 1;//busy wait
+                    while (control[2].load(std::memory_order_seq_cst) == 1 && shouldSendData) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
                         if (!shouldRun) return;
+
+                        printf(">>>>waitForRemoteReady control[2]:%d",control[2].load(std::memory_order_seq_cst));
                     }
+                    if(shouldSendData==false)continue;
 
                     // Send the data
                     if (data.size() <= n2rBufferSize) {
@@ -260,22 +271,18 @@ private:
                         control[2].store(1, std::memory_order_seq_cst);
                     }
 
-                    // Optional delay between sends
-                    if (sendInterval > 0) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(sendInterval));
-                    }
                 }
             } else {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
         }
+        printf("sendingThreadFunc end....");
     }
 
     std::atomic<bool> shouldRun;
     bool shouldSendData;
-    uint32_t sendInterval;
 
-    std::thread* nativeThread;
+    std::thread* recvThread;
     std::thread* sendingThread;  // Renamed from nativeDataThread
 
     Napi::Reference<Napi::ArrayBuffer> sharedArrayBufferRef;
@@ -335,12 +342,7 @@ Napi::Value Cleanup(const Napi::CallbackInfo& info) {
 Napi::Value StartSendingData(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     
-    uint32_t interval = 1000;
-    if (info.Length() > 0 && info[0].IsNumber()) {
-        interval = info[0].As<Napi::Number>().Uint32Value();
-    }
-    printf("interval: %d\n", interval);
-    channel.startSendingData(interval);
+    channel.startSendingData();
     return env.Undefined();
 }
 

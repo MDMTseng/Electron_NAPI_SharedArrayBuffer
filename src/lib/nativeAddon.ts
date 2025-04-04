@@ -14,7 +14,7 @@ function getAddonPath() {
 
     //TODO:HACK hard code addon path
     console.log(__dirname);
-    return "/Users/mdm/workspace/LittleJourney/PluginRemote/ElectronSharedBuffer/build/Release/addon";
+    return `${process.cwd()}/build/Release/addon`;
 }
 
 let addon: any;

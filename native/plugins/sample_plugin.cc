@@ -1,6 +1,7 @@
 #include "../plugin_interface.h"
 #include <cstring>
 #include <iostream>
+#include <opencv2/opencv.hpp>
 
 static MessageCallback g_callback = nullptr;
 
