@@ -90,7 +90,7 @@ void plugin_message_callback(const uint8_t* data, size_t length) {
 
 class SharedMemoryChannel {
 public:
-    SharedMemoryChannel() : shouldRun(true), shouldSendData(true),
+    SharedMemoryChannel() : isChannelOperating(true),
         recvThread(nullptr), sendingThread(nullptr),
         control(nullptr), dataR2N(nullptr), dataN2R(nullptr),
         r2nBufferSize(0), n2rBufferSize(0) {}
@@ -120,7 +120,7 @@ public:
         }
 
         // Start threads
-        shouldRun = true;
+        isChannelOperating = true;
         recvThread = new std::thread(&SharedMemoryChannel::recvThreadFunc, this);
         sendingThread = new std::thread(&SharedMemoryChannel::sendingThreadFunc, this);
 
@@ -128,14 +128,13 @@ public:
 
     void cleanup() {
         stopSendingData();
-        // First stop all threads by setting shouldRun to false
+        // First stop all threads by setting isChannelOperating to false
         // This will interrupt wait_and_pop in the sending thread
-        shouldRun = false;
+        isChannelOperating = false;
         
         // Clear the sending queue and stop sending
         sendQueue.clear();
         
-        shouldSendData = false;
 
         // Cleanup native thread
         if (recvThread) {
@@ -174,27 +173,43 @@ public:
     }
 
     void startSendingData() {
-        shouldSendData = true;
         printf("startSendingData\n");
         sendQueue.reset_interrupt();
     }
 
     void stopSendingData() {
-        shouldSendData = false;
         sendQueue.interrupt();
         printf("stopSendingData\n");
     }
 
     // New method to queue data for sending
     void queueData(const std::vector<uint8_t>& data) {
-        if (shouldSendData && data.size() <= n2rBufferSize) {
+        if (data.size() <= n2rBufferSize) {
             sendQueue.push(data);
         }
     }
 
 private:
-    void processMessage() {
-        if (control[0] == 1) {
+
+
+    void recvThreadFunc() {
+        while (isChannelOperating) {
+            // Update plugin if loaded
+            if (g_plugin_loader.is_loaded()) {
+                g_plugin_loader.update();
+            }
+
+            int wait_time = 1;
+            // Wait for Renderer → Native
+            while (control && control[0].load(std::memory_order_seq_cst) != 1) {
+                std::this_thread::sleep_for(std::chrono::microseconds(wait_time));
+                wait_time++;
+                if(wait_time > 1000) {
+                    wait_time = 1000;
+                }
+                if (!isChannelOperating) return;
+            }
+
             size_t length = static_cast<size_t>(control[1]);
             if (length > 0 && length <= r2nBufferSize) {
                 // Forward to plugin if loaded
@@ -215,40 +230,17 @@ private:
         }
     }
 
-    void recvThreadFunc() {
-        while (shouldRun) {
-            // Update plugin if loaded
-            if (g_plugin_loader.is_loaded()) {
-                g_plugin_loader.update();
-            }
-
-            int wait_time = 1;
-            // Wait for Renderer → Native
-            while (control && control[0].load(std::memory_order_seq_cst) != 1) {
-                std::this_thread::sleep_for(std::chrono::microseconds(wait_time));
-                wait_time++;
-                if(wait_time > 1000) {
-                    wait_time = 1000;
-                }
-                if (!shouldRun) return;
-            }
-
-            if (!control) continue;
-            processMessage();
-        }
-    }
-
     void sendingThreadFunc() {
         std::vector<uint8_t> data;
         bool should_continue = true;
         int runCount=0;
-        while (shouldRun) {
-            should_continue = shouldRun.load(std::memory_order_seq_cst);
+        while (isChannelOperating) {
+            should_continue = isChannelOperating.load(std::memory_order_seq_cst);
             
             if(runCount%10==0)
                 printf(">>>>runCount:%d",runCount);
             runCount++;
-            if (shouldSendData && control && dataN2R) {
+            if (control && dataN2R) {
                 // Try to get data from the queue
                 printf("q size: %zu  sendQueue.is_interrupted(): %d\n", sendQueue.size(), sendQueue.is_interrupted());
                 bool is_new_data = sendQueue.wait_and_pop(data, should_continue);
@@ -256,13 +248,12 @@ private:
                     // Wait until renderer has processed previous message
 
                     int waitForRemoteReady = 1;//busy wait
-                    while (control[2].load(std::memory_order_seq_cst) == 1 && shouldSendData) {
+                    while (control[2].load(std::memory_order_seq_cst) == 1) {
                         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                        if (!shouldRun) return;
+                        if (!isChannelOperating) return;
 
                         printf(">>>>waitForRemoteReady control[2]:%d",control[2].load(std::memory_order_seq_cst));
                     }
-                    if(shouldSendData==false)continue;
 
                     // Send the data
                     if (data.size() <= n2rBufferSize) {
@@ -279,8 +270,7 @@ private:
         printf("sendingThreadFunc end....");
     }
 
-    std::atomic<bool> shouldRun;
-    bool shouldSendData;
+    std::atomic<bool> isChannelOperating;
 
     std::thread* recvThread;
     std::thread* sendingThread;  // Renamed from nativeDataThread
