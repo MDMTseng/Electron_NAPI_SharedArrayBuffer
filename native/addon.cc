@@ -126,7 +126,6 @@ public:
     }
 
     void cleanup() {
-        stopSendingData();
         // First stop all threads by setting isChannelOperating to false
         // This will interrupt wait_and_pop in the sending thread
         isChannelOperating = false;
@@ -160,15 +159,8 @@ public:
             messageCallback.Reset();
         }
 
-        startSendingData();
     }
 
-    void startSendingData() {
-        printf("startSendingData\n");
-    }
-
-    void stopSendingData() {
-    }
 
     int send_buffer(const uint8_t* data, size_t length,uint32_t wait_ms) {
         if (length <= 0 || length > n2rBufferSize || data==nullptr)return -1;
@@ -292,18 +284,6 @@ Napi::Value Cleanup(const Napi::CallbackInfo& info) {
     return info.Env().Undefined();
 }
 
-Napi::Value StartSendingData(const Napi::CallbackInfo& info) {
-    Napi::Env env = info.Env();
-    
-    channel.startSendingData();
-    return env.Undefined();
-}
-
-Napi::Value StopSendingData(const Napi::CallbackInfo& info) {
-    channel.stopSendingData();
-    return info.Env().Undefined();
-}
-
 Napi::Value TriggerTestCallback(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     
@@ -348,8 +328,6 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set("setSharedBuffer", Napi::Function::New(env, SetSharedBuffer));
     exports.Set("cleanup", Napi::Function::New(env, Cleanup));
     exports.Set("hello", Napi::Function::New(env, Hello));
-    exports.Set("startSendingData", Napi::Function::New(env, StartSendingData));
-    exports.Set("stopSendingData", Napi::Function::New(env, StopSendingData));
     exports.Set("setMessageCallback", Napi::Function::New(env, SetMessageCallback));
     exports.Set("triggerTestCallback", Napi::Function::New(env, TriggerTestCallback));
     exports.Set("loadPlugin", Napi::Function::New(env, LoadPlugin));

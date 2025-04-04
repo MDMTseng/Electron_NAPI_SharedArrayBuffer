@@ -48,8 +48,9 @@ function App() {
       });
     };
     setChannel(newChannel);
-    nativeAddon.startSendingData(0);
-    newChannel.startReceiving((message: string) => {
+    newChannel.startReceiving((rawData: Uint8Array) => {
+      let decoder=new TextDecoder();
+      let message=decoder.decode(rawData);
       setMessages(prev => [...prev, `Received: ${message}`]);
     });
   };
@@ -79,15 +80,16 @@ function App() {
 
   const startReceiving = () => {
     if (!channel) return;
-    nativeAddon.startSendingData(0);
-    channel.startReceiving((message: string) => {
+
+    channel.startReceiving((rawData: Uint8Array) => {
+      let decoder=new TextDecoder();
+      let message=decoder.decode(rawData);
       setMessages(prev => [...prev, `Received: ${message}`]);
     });
   };
 
   const stopReceiving = () => {
     if (!channel) return;
-    nativeAddon.stopSendingData();
     channel.stopReceiving();
   };
 

@@ -10,9 +10,7 @@ export class SharedMemoryChannel {
     private dataN2R: Uint8Array | null;
     private isProcessingQueue: boolean;
     private isReceiving: boolean;
-    private encoder: TextEncoder;
-    private decoder: TextDecoder;
-    private onMessageCallback: ((message: string, rawData: Uint8Array) => void) | null;
+    private onMessageCallback: ((rawData: Uint8Array) => void) | null;
     private recv_fast_check_interval: number;
     private recv_slow_check_interval: number;
     private binded_processSendQueue: () => void;
@@ -21,14 +19,14 @@ export class SharedMemoryChannel {
     public onMessageQueueEmptyCallback: (() => void) | null;
     public queueUpdateThrottle: Throttle;
 
+    public send_direct_process_promise_queue:Promise<any>[];
+
     constructor(rendererToNativeSize = 1024, nativeToRendererSize = 1024) {
         this.RENDERER_TO_NATIVE_SIZE = rendererToNativeSize;
         this.NATIVE_TO_RENDERER_SIZE = nativeToRendererSize;
         this.messageQueue = [];
         this.isProcessingQueue = false;
         this.isReceiving = false;
-        this.encoder = new TextEncoder();
-        this.decoder = new TextDecoder();
         this.onMessageCallback = null;
         this.recv_fast_check_interval = 1;
         this.recv_slow_check_interval = 10;
@@ -42,6 +40,8 @@ export class SharedMemoryChannel {
 
 
         this.binded_processSendQueue=this._processSendQueue.bind(this);
+
+        this.send_direct_process_promise_queue=[];
     }
 
     private initialize() {
@@ -70,6 +70,56 @@ export class SharedMemoryChannel {
         this.dataN2R = new Uint8Array(this.sharedBuffer, 16 + this.RENDERER_TO_NATIVE_SIZE, this.NATIVE_TO_RENDERER_SIZE);
     }
 
+
+    
+    public async send_direct(messageBytes: Uint8Array,wait_ms:number=1000)//BUG
+    {
+        this.isProcessingQueue=true;
+        let resolve:any;
+        let reject:any;
+        let newPromise=new Promise((_resolve,_reject)=>{
+            resolve=_resolve;
+            reject=_reject;
+            
+        });
+        this.send_direct_process_promise_queue.push(newPromise);
+        if(this.send_direct_process_promise_queue.length>1)
+        {
+            await this.send_direct_process_promise_queue[0];
+            this.send_direct_process_promise_queue.splice(0,1);//remove the first promise
+        }
+
+        let isTimeout=true;
+        for(let i=0;i<wait_ms && this.isProcessingQueue;i++)
+        {
+            if(Atomics.load(this.control!, 0) !== 0)//wait for remote to be ready
+            {
+                await new Promise(resolve => setTimeout(resolve, 0));
+                continue;
+            }
+            isTimeout=false;
+            break;
+            
+            
+        }
+        if(isTimeout)
+        {
+            resolve(0);
+            throw new Error("send_direct timeout: remote is not ready");
+        }
+        {
+            console.log("messageBytes",messageBytes);
+            this.dataR2N!.set(messageBytes, 0);
+
+            this.control![1] = messageBytes.length;
+            Atomics.store(this.control!, 0, 1);//notify remote to receive
+            
+
+        }
+
+        resolve(0);
+        return;
+    }
     public send(messageBytes: Uint8Array) {
         if (!this.sharedBuffer) return;
         // const messageBytes = this.encoder.encode(message);
@@ -80,7 +130,7 @@ export class SharedMemoryChannel {
 
         this.messageQueue.push(messageBytes);
 
-        if (!this.isProcessingQueue) {
+        if (!this.isProcessingQueue) {//kick start
             this.isProcessingQueue = true;
             // requestAnimationFrame(() => this._processSendQueue());
             setTimeout(this.binded_processSendQueue,0)
@@ -97,23 +147,34 @@ export class SharedMemoryChannel {
         if(Atomics.load(this.control!, 0) !== 0)
         {
             setTimeout(this.binded_processSendQueue,0)
+            return;
         }
         {
-            let packOffset = 0;
-            let pack_last_idx = -1;
-            
-            for (let i = 0; i < this.messageQueue.length; i++) {
-                if (packOffset + this.messageQueue[i].length > this.dataR2N!.length) {
-                    break;
-                }
-                this.dataR2N!.set(this.messageQueue[i], packOffset);
-                packOffset += this.messageQueue[i].length;
-                pack_last_idx = i;
-            }
 
-            this.control![1] = packOffset;
+            let doStacking=false;
+            if(doStacking)
+            {
+                let packOffset = 0;
+                let pack_last_idx = -1;
+                
+                for (let i = 0; i < this.messageQueue.length; i++) {
+                    if (packOffset + this.messageQueue[i].length > this.dataR2N!.length) {
+                        break;
+                    }
+                    this.dataR2N!.set(this.messageQueue[i], packOffset);
+                    packOffset += this.messageQueue[i].length;
+                    pack_last_idx = i;
+                }
+                this.control![1] = packOffset;
+                this.messageQueue.splice(0, pack_last_idx + 1);
+            }
+            else
+            {
+                this.dataR2N!.set(this.messageQueue[0], 0);
+                this.control![1] = this.messageQueue[0].length;
+                this.messageQueue.splice(0, 1);//remove the first message
+            }
             Atomics.store(this.control!, 0, 1);
-            this.messageQueue.splice(0, pack_last_idx + 1);
 
         }
 
@@ -129,9 +190,12 @@ export class SharedMemoryChannel {
         }
     }
 
-    public startReceiving(callback: (message: string) => void) {
+
+
+
+    public startReceiving(callback: (message: Uint8Array) => void) {
         if (!this.sharedBuffer) return;
-        this.onMessageCallback = (message: string) => callback(message);
+        this.onMessageCallback = (rawData: Uint8Array) => callback(rawData);
         this.isReceiving = true;
         this._processReceiveQueue();
     }
@@ -143,16 +207,15 @@ export class SharedMemoryChannel {
     private _processReceiveQueue() {
         if (!this.sharedBuffer || !this.isReceiving) return;
         
-        if (Atomics.load(this.control!, 2) === 1) {
+        if (Atomics.load(this.control!, 2) === 1) {//wait for remote to send message
             const length = this.control![3];
             if (length <= this.NATIVE_TO_RENDERER_SIZE) {
                 const data = this.dataN2R!.slice(0, length);
-                const message = this.decoder.decode(data);
                 if (this.onMessageCallback) {
-                    this.onMessageCallback(message, data);
+                    this.onMessageCallback(data);
                 }
             }
-            Atomics.store(this.control!, 2, 0);
+            Atomics.store(this.control!, 2, 0);//send recv finished signal
             if (this.isReceiving) {
                 setTimeout(() => this._processReceiveQueue(), this.recv_fast_check_interval);
             }
