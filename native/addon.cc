@@ -91,7 +91,7 @@ void plugin_message_callback(const uint8_t* data, size_t length) {
 class SharedMemoryChannel {
 public:
     SharedMemoryChannel() : isChannelOperating(true),
-        recvThread(nullptr), sendingThread(nullptr),
+        recvThread(nullptr),
         control(nullptr), dataR2N(nullptr), dataN2R(nullptr),
         r2nBufferSize(0), n2rBufferSize(0) {}
 
@@ -122,7 +122,6 @@ public:
         // Start threads
         isChannelOperating = true;
         recvThread = new std::thread(&SharedMemoryChannel::recvThreadFunc, this);
-        sendingThread = new std::thread(&SharedMemoryChannel::sendingThreadFunc, this);
 
     }
 
@@ -132,8 +131,6 @@ public:
         // This will interrupt wait_and_pop in the sending thread
         isChannelOperating = false;
         
-        // Clear the sending queue and stop sending
-        sendQueue.clear();
         
 
         // Cleanup native thread
@@ -143,12 +140,6 @@ public:
             recvThread = nullptr;
         }
 
-        // Cleanup sending thread
-        if (sendingThread) {
-            sendingThread->join();
-            delete sendingThread;
-            sendingThread = nullptr;
-        }
 
         // Reset pointers
         control = nullptr;
@@ -174,21 +165,34 @@ public:
 
     void startSendingData() {
         printf("startSendingData\n");
-        sendQueue.reset_interrupt();
     }
 
     void stopSendingData() {
-        sendQueue.interrupt();
-        printf("stopSendingData\n");
     }
 
-    // New method to queue data for sending
-    void queueData(const std::vector<uint8_t>& data) {
-        if (data.size() <= n2rBufferSize) {
-            sendQueue.push(data);
+    int send_buffer(const uint8_t* data, size_t length,uint32_t wait_ms) {
+        if (length <= 0 || length > n2rBufferSize || data==nullptr)return -1;
+
+
+        if(1)
+        {
+            std::lock_guard<std::mutex> lock(send_buffer_mutex);
+            int isLineBusy=1;
+            for (int i = 0; i < wait_ms; i++) {
+                isLineBusy=control[2].load(std::memory_order_seq_cst);
+                if(isLineBusy==0)break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            if(isLineBusy==1)return -2;
+
+            control[3].store(length, std::memory_order_seq_cst);
+            memcpy(dataN2R, data, length);
+            control[2].store(1, std::memory_order_seq_cst);
+            return 0;
+
         }
     }
-
+    
 private:
 
 
@@ -230,51 +234,11 @@ private:
         }
     }
 
-    void sendingThreadFunc() {
-        std::vector<uint8_t> data;
-        bool should_continue = true;
-        int runCount=0;
-        while (isChannelOperating) {
-            should_continue = isChannelOperating.load(std::memory_order_seq_cst);
-            
-            if(runCount%10==0)
-                printf(">>>>runCount:%d",runCount);
-            runCount++;
-            if (control && dataN2R) {
-                // Try to get data from the queue
-                printf("q size: %zu  sendQueue.is_interrupted(): %d\n", sendQueue.size(), sendQueue.is_interrupted());
-                bool is_new_data = sendQueue.wait_and_pop(data, should_continue);
-                if (is_new_data) {
-                    // Wait until renderer has processed previous message
-
-                    int waitForRemoteReady = 1;//busy wait
-                    while (control[2].load(std::memory_order_seq_cst) == 1) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                        if (!isChannelOperating) return;
-
-                        printf(">>>>waitForRemoteReady control[2]:%d",control[2].load(std::memory_order_seq_cst));
-                    }
-
-                    // Send the data
-                    if (data.size() <= n2rBufferSize) {
-                        memcpy(dataN2R, data.data(), data.size());
-                        control[3].store(data.size(), std::memory_order_seq_cst);
-                        control[2].store(1, std::memory_order_seq_cst);
-                    }
-
-                }
-            } else {
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            }
-        }
-        printf("sendingThreadFunc end....");
-    }
-
+    //lock
+    std::mutex send_buffer_mutex;
     std::atomic<bool> isChannelOperating;
 
     std::thread* recvThread;
-    std::thread* sendingThread;  // Renamed from nativeDataThread
-
     Napi::Reference<Napi::ArrayBuffer> sharedArrayBufferRef;
     std::atomic<int32_t>* control;
     uint8_t* dataR2N;
@@ -282,16 +246,15 @@ private:
     size_t r2nBufferSize;
     size_t n2rBufferSize;
 
-    ThreadSafeQueue<std::vector<uint8_t>> sendQueue;  // Queue for sending data
 };
 
 // Global instance of SharedMemoryChannel
 SharedMemoryChannel channel;
 
 
-void plugin_message_to_queue(const uint8_t* data, size_t length) {
-    std::vector<uint8_t> data_copy(data, data + length);
-    channel.queueData(data_copy);
+
+void memcpy_to_shared_buffer(const uint8_t* data, size_t length) {
+    channel.send_buffer(data,length,1000);
 }
 
 
@@ -345,14 +308,10 @@ Napi::Value TriggerTestCallback(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     
     std::string testMessage = "Test callback from native code!";
-    std::vector<uint8_t> testMessageVector(testMessage.begin(), testMessage.end());
-    
-    int length = testMessageVector.size();
-    printf("length: %d\n",length);
-    // Queue the test message for sending
-    channel.queueData(testMessageVector);
-    // printf("q size: %zu, length: %d\n", channel.sendQueue.size(), length);
-    
+
+
+    channel.send_buffer((uint8_t*)testMessage.c_str(),testMessage.size(),1000);
+  
     return env.Undefined();
 }
 
@@ -372,7 +331,7 @@ Napi::Value LoadPlugin(const Napi::CallbackInfo& info) {
         // Initialize the plugin with our callback
         const PluginInterface* interface = g_plugin_loader.get_interface();
         if (interface) {
-            interface->initialize(plugin_message_to_queue);
+            interface->initialize(memcpy_to_shared_buffer);
         }
     }
     
