@@ -8,6 +8,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Find OpenCV package
 find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs)
 
+# === Add BPG Protocol Library ===
+add_subdirectory(BPG_Protocol)
+# ==============================
+
 # Set output directories
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
@@ -17,10 +21,14 @@ add_library(sample_plugin SHARED
     sample_plugin.cc
 )
 
-# Link OpenCV
-target_link_libraries(sample_plugin PRIVATE ${OpenCV_LIBS})
+# Link dependencies
+target_link_libraries(sample_plugin PRIVATE 
+    ${OpenCV_LIBS}
+    bpg_protocol
+)
 target_include_directories(sample_plugin PRIVATE 
     ${CMAKE_SOURCE_DIR}/..
+    ${CMAKE_CURRENT_SOURCE_DIR}/BPG_Protocol
     ${OpenCV_INCLUDE_DIRS}
 )
 
