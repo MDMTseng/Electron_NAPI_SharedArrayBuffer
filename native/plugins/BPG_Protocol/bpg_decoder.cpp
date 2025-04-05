@@ -19,27 +19,29 @@ BpgDecoder::BpgDecoder() = default;
 void BpgDecoder::reset() {
     internal_buffer_.clear();
     active_groups_.clear();
+    std::cout << "BPG Decoder reset." << std::endl;
 }
 
 // --- New Helper: Parse Header from contiguous buffer ---
 static bool parseHeaderFromBuffer(const uint8_t* buffer_start, size_t buffer_len, PacketHeader& out_header) {
-    // Check if the provided buffer is large enough for the fixed header size
-    if (!buffer_start || buffer_len < BPG_HEADER_SIZE) { // Use BPG_HEADER_SIZE here
+    if (!buffer_start || buffer_len < BPG_HEADER_SIZE) { // Check against 18-byte size
         std::cerr << "[BPG Decode ERR] parseHeaderFromBuffer called with invalid args: buffer_start=" 
                   << (void*)buffer_start << ", buffer_len=" << buffer_len << " (expected >= " << BPG_HEADER_SIZE << ")" << std::endl;
         return false;
     }
 
     const uint8_t* ptr = buffer_start;
-    uint32_t group_id_n, target_id_n, data_length_n;
+    uint32_t group_id_n, target_id_n, prop_n, data_length_n;
 
     std::memcpy(&group_id_n, ptr, sizeof(group_id_n)); ptr += sizeof(group_id_n);
     std::memcpy(&target_id_n, ptr, sizeof(target_id_n)); ptr += sizeof(target_id_n);
     std::memcpy(out_header.tl, ptr, sizeof(PacketType)); ptr += sizeof(PacketType);
+    std::memcpy(&prop_n, ptr, sizeof(prop_n)); ptr += sizeof(prop_n); // Read the 4-byte prop field
     std::memcpy(&data_length_n, ptr, sizeof(data_length_n));
 
     out_header.group_id = ntohl(group_id_n);
     out_header.target_id = ntohl(target_id_n);
+    out_header.prop = ntohl(prop_n); // Convert prop from network order
     out_header.data_length = ntohl(data_length_n);
     return true;
 }
@@ -167,10 +169,14 @@ bool BpgDecoder::tryParsePacket(std::deque<uint8_t>& buffer,
 
     // --- Step 7: Process the successfully parsed packet (if applicable) --- 
     if (data_err == BpgError::Success) {
+        // Check the EG bit from the uint32_t prop field
+        bool is_end = (header.prop & BPG_PROP_EG_BIT_MASK) != 0;
+
         AppPacket app_packet;
         app_packet.group_id = header.group_id;
         app_packet.target_id = header.target_id;
         std::memcpy(app_packet.tl, header.tl, sizeof(PacketType));
+        app_packet.is_end_of_group = is_end; // Set flag from header.prop LSB
         app_packet.content = std::move(hybrid_data); 
 
         if (!active_groups_.count(app_packet.group_id)) {
@@ -186,10 +192,10 @@ bool BpgDecoder::tryParsePacket(std::deque<uint8_t>& buffer,
              } catch(...) { std::cerr << "[BPG ERR] Unknown exception in packet_callback" << std::endl; }
         }
 
-        if (strncmp(stored_packet.tl, "EG", 2) == 0 && group_callback) {
-            auto group_iter = active_groups_.find(stored_packet.group_id);
+        if (is_end && group_callback) {
+            auto group_iter = active_groups_.find(header.group_id);
             if (group_iter != active_groups_.end()) {
-                 try { group_callback(stored_packet.group_id, std::move(group_iter->second)); } catch(const std::exception& e) {
+                 try { group_callback(header.group_id, std::move(group_iter->second)); } catch(const std::exception& e) {
                      std::cerr << "[BPG ERR] Exception in group_callback: " << e.what() << std::endl;
                  } catch(...) { std::cerr << "[BPG ERR] Unknown exception in group_callback" << std::endl; }
                 active_groups_.erase(group_iter);

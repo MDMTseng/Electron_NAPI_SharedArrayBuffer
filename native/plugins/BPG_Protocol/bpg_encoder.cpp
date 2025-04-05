@@ -8,23 +8,20 @@ namespace BPG {
 
 void BpgEncoder::serializeHeader(const PacketHeader& header, BinaryData& buffer) {
     size_t initial_size = buffer.size();
-    // Resize buffer by the fixed header size
-    buffer.resize(initial_size + BPG_HEADER_SIZE); 
+    buffer.resize(initial_size + BPG_HEADER_SIZE); // Use 18-byte constant
 
     uint8_t* ptr = buffer.data() + initial_size;
 
     uint32_t group_id_n = htonl(header.group_id);
     uint32_t target_id_n = htonl(header.target_id);
+    uint32_t prop_n = htonl(header.prop); // Convert prop to network order
     uint32_t data_length_n = htonl(header.data_length);
 
-    // Use BPG_HEADER_SIZE - 4 for the memcpy limit if needed, but sizes are known
     std::memcpy(ptr, &group_id_n, sizeof(group_id_n)); ptr += sizeof(group_id_n);
     std::memcpy(ptr, &target_id_n, sizeof(target_id_n)); ptr += sizeof(target_id_n);
     std::memcpy(ptr, header.tl, sizeof(PacketType)); ptr += sizeof(PacketType);
-    std::memcpy(ptr, &data_length_n, sizeof(data_length_n)); ptr += sizeof(data_length_n);
-    
-    // Ensure exactly BPG_HEADER_SIZE bytes were written (optional sanity check)
-    // assert( (ptr - (buffer.data() + initial_size)) == BPG_HEADER_SIZE );
+    std::memcpy(ptr, &prop_n, sizeof(prop_n)); ptr += sizeof(prop_n); // Copy the 4-byte prop field
+    std::memcpy(ptr, &data_length_n, sizeof(data_length_n));
 }
 
 // Simplified: Calculates size for HybridData only
@@ -59,11 +56,14 @@ BpgError BpgEncoder::encodePacket(const AppPacket& packet, BinaryData& out_buffe
     PacketHeader header;
     header.group_id = packet.group_id;
     header.target_id = packet.target_id;
-    std::memcpy(header.tl, packet.tl, sizeof(PacketType)); // Copy TL from AppPacket
+    std::memcpy(header.tl, packet.tl, sizeof(PacketType));
     header.data_length = static_cast<uint32_t>(data_size);
 
-    // Optional reservation can use the constant
-    // out_buffer.reserve(out_buffer.size() + BPG_HEADER_SIZE + data_size);
+    // Set the prop field (uint32_t) - zero out first, then set EG bit if needed
+    header.prop = 0; // Zero out all bits
+    if (packet.is_end_of_group) {
+        header.prop |= BPG_PROP_EG_BIT_MASK; // Set the LSB
+    }
 
     serializeHeader(header, out_buffer);
     BpgError data_err = serializeAppData(packet.content, out_buffer);
@@ -77,8 +77,7 @@ BpgError BpgEncoder::encodePacketGroup(const AppPacketGroup& group, BinaryData& 
     out_buffer.clear(); 
     size_t total_size = 0;
     for (const auto& packet : group) {
-        // Use constant for header size calculation
-        total_size += BPG_HEADER_SIZE + calculateAppDataSize(packet.content);
+        total_size += BPG_HEADER_SIZE + calculateAppDataSize(packet.content); // Uses 18-byte constant
     }
     out_buffer.reserve(total_size);
 

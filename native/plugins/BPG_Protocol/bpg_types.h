@@ -3,26 +3,25 @@
 #include <cstdint>
 #include <vector>
 #include <string>
-// #include <variant> // No longer needed if AppDataVariant was removed
+// #include <array> // No longer needed
 
 namespace BPG {
 
 // Fixed size of the BPG packet header in bytes.
-// Breakdown: group_id(4) + target_id(4) + tl(2) + data_length(4) = 14
-constexpr size_t BPG_HEADER_SIZE = 14;
+// Breakdown: group_id(4) + target_id(4) + tl(2) + prop(4) + data_length(4) = 18
+constexpr size_t BPG_HEADER_SIZE = 18;
+constexpr uint32_t BPG_PROP_EG_BIT_MASK = 0x00000001; // Mask for the EG bit (LSB of prop field)
 
 // Two-letter packet type identifier
 typedef char PacketType[2];
 
 // Packet Header Structure Definition.
-// NOTE: Do NOT use sizeof(PacketHeader) directly in serialization/deserialization logic.
-// Use the BPG_HEADER_SIZE constant instead to ensure the fixed 14-byte wire format.
-// The actual memory layout might include padding depending on the compiler,
-// but the protocol logic MUST read/write exactly 14 bytes based on the fields.
+// NOTE: Use the BPG_HEADER_SIZE constant for serialization/deserialization logic.
 struct PacketHeader {
     uint32_t group_id;      // 4 bytes, Big Endian
     uint32_t target_id;     // 4 bytes, Big Endian
     PacketType tl;          // 2 bytes
+    uint32_t prop;          // 4 bytes, Big Endian, Property bitfield
     uint32_t data_length;   // 4 bytes, Big Endian (Length of data *after* header)
 };
 
@@ -41,10 +40,13 @@ struct AppPacket {
     uint32_t group_id;
     uint32_t target_id;
     PacketType tl;
+    bool is_end_of_group; // NEW: Flag to indicate if this is the last packet of the group
     HybridData content;
 };
 
 // Represents a group of packets at the application level
+// Note: The concept of a 'group' is now less explicit in the protocol itself,
+// but still useful at the application layer for collecting related packets.
 using AppPacketGroup = std::vector<AppPacket>;
 
 // Error codes (optional, can be expanded)

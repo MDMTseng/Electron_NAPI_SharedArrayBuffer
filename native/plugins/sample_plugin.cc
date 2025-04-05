@@ -60,43 +60,32 @@ static bool send_acknowledgement_group(uint32_t group_id, uint32_t response_targ
 
     std::cout << "[SamplePlugin BPG] Sending ACK Group ID: " << group_id << ", Target ID: " << response_target_id << std::endl;
     BPG::BpgEncoder encoder;
-    BPG::AppPacketGroup group_to_send;
+    BPG::AppPacketGroup group_to_send; // Will only contain one packet now
 
-    // 1. Acknowledgement Packet
+    // 1. Acknowledgement Packet - This is the only and last packet
     BPG::AppPacket ack_packet;
     ack_packet.group_id = group_id;
-    ack_packet.target_id = response_target_id; // Use the new target ID
-    std::memcpy(ack_packet.tl, "AK", 2); // Acknowledgement Type
-    // ACK content can be minimal or empty
+    ack_packet.target_id = response_target_id; 
+    std::memcpy(ack_packet.tl, "AK", 2); 
+    ack_packet.is_end_of_group = true; // Set EG flag HERE
     BPG::HybridData ack_hybrid_data;
     std::string ack_str = "{\"acknowledged\":true}";
     ack_hybrid_data.binary_bytes.assign(ack_str.begin(), ack_str.end());
     ack_packet.content = std::move(ack_hybrid_data);
     group_to_send.push_back(ack_packet);
 
-    // 2. End Group Packet
-    BPG::AppPacket eg_packet;
-    eg_packet.group_id = group_id;
-    eg_packet.target_id = response_target_id; // Use the new target ID
-    std::memcpy(eg_packet.tl, "EG", 2);
-    group_to_send.push_back(eg_packet);
-
-    // Encode packets individually and send them
-    bool success = true;
-    for (const auto& packet : group_to_send) {
-        BPG::BinaryData encoded_packet_buffer;
-        BPG::BpgError encode_err = encoder.encodePacket(packet, encoded_packet_buffer);
-        if (encode_err == BPG::BpgError::Success) {
-            std::cout << "  Sending ACK packet Type: " << std::string(packet.tl, 2) << ", Size: " << encoded_packet_buffer.size() << std::endl;
-            g_send_message(encoded_packet_buffer.data(), encoded_packet_buffer.size());
-        } else {
-            std::cerr << "[SamplePlugin BPG] Error encoding ACK packet (Type: "
-                      << std::string(packet.tl, 2) << "): " << static_cast<int>(encode_err) << std::endl;
-            success = false;
-            break; 
-        }
+    // Encode and send the single ACK packet
+    BPG::BinaryData encoded_packet_buffer;
+    BPG::BpgError encode_err = encoder.encodePacket(group_to_send[0], encoded_packet_buffer);
+    if (encode_err == BPG::BpgError::Success) {
+        std::cout << "  Sending ACK packet Type: " << std::string(group_to_send[0].tl, 2) << ", Size: " << encoded_packet_buffer.size() << std::endl;
+        g_send_message(encoded_packet_buffer.data(), encoded_packet_buffer.size());
+        return true;
+    } else {
+        std::cerr << "[SamplePlugin BPG] Error encoding ACK packet (Type: "
+                  << std::string(group_to_send[0].tl, 2) << "): " << static_cast<int>(encode_err) << std::endl;
+        return false;
     }
-    return success;
 }
 
 // Example function to handle a completed packet group
@@ -135,31 +124,25 @@ static bool send_example_bpg_group(uint32_t group_id, uint32_t target_id) {
     text_packet.group_id = group_id;
     text_packet.target_id = target_id;
     std::memcpy(text_packet.tl, "TX", 2);
+    text_packet.is_end_of_group = false; // Not the last packet
     BPG::HybridData text_hybrid_data;
     std::string text_str = "Response from Sample Plugin";
     text_hybrid_data.binary_bytes.assign(text_str.begin(), text_str.end());
     text_packet.content = std::move(text_hybrid_data);
     group_to_send.push_back(text_packet);
 
-    // 2. Example Status Packet
+    // 2. Example Status Packet - This is now the last packet
     BPG::AppPacket status_packet;
     status_packet.group_id = group_id;
     status_packet.target_id = target_id;
-    std::memcpy(status_packet.tl, "ST", 2); // Custom status type
+    std::memcpy(status_packet.tl, "ST", 2); 
+    status_packet.is_end_of_group = true; // Set EG flag HERE
     BPG::HybridData status_hybrid_data;
     status_hybrid_data.metadata_str = "{\"status\":\"idle\"}"; // Use metadata_str
     status_packet.content = std::move(status_hybrid_data);
     group_to_send.push_back(status_packet);
 
-    // 3. End Group Packet
-    BPG::AppPacket eg_packet;
-    eg_packet.group_id = group_id;
-    eg_packet.target_id = target_id;
-    std::memcpy(eg_packet.tl, "EG", 2);
-    // EG content often minimal or empty
-    group_to_send.push_back(eg_packet);
-
-    // Encode packets individually and send them (simulates streaming)
+    // Encode packets individually and send them
     bool success = true;
     for (const auto& packet : group_to_send) {
         BPG::BinaryData encoded_packet_buffer;
@@ -171,7 +154,7 @@ static bool send_example_bpg_group(uint32_t group_id, uint32_t target_id) {
             std::cerr << "[SamplePlugin BPG] Error encoding packet (Type: "
                       << std::string(packet.tl, 2) << "): " << static_cast<int>(encode_err) << std::endl;
             success = false;
-            break; // Stop sending if one packet fails to encode
+            break; 
         }
     }
     return success;

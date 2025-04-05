@@ -87,46 +87,37 @@ function App() {
     const message = messageInput.value;
     if (!message || !channel) return;
     
-    // --- Create BPG Packet Group (Example: Single Text Packet + EG) ---
     const currentGroupId = bpgGroupId;
-    setBpgGroupId(prev => prev + 1); // Increment group ID for next send
+    setBpgGroupId(prev => prev + 1); 
     const packetsToSend: AppPacket[] = [];
     
-    // 1. Text Packet ('TX')
+    // 1. Text Packet ('TX') - This is now the only packet in this example
     const textHybrid: HybridData = {
-      metadata_str: "", // Use metadata_str
+      metadata_str: "", 
       binary_bytes: new TextEncoder().encode(message)
     };
     const textPacket: AppPacket = {
       group_id: currentGroupId,
       target_id: bpgTargetId,
       tl: "TX", 
+      is_end_of_group: true, // Set EG flag on the last packet
       content: textHybrid
     };
     packetsToSend.push(textPacket);
     
-    // 2. End Group Packet ('EG')
-    const egHybrid: HybridData = { metadata_str: "", binary_bytes: new Uint8Array(0) }; // Use metadata_str
-    const egPacket: AppPacket = {
-      group_id: currentGroupId,
-      target_id: bpgTargetId,
-      tl: "EG",
-      content: egHybrid
-    };
-    packetsToSend.push(egPacket);
-    // -----------------------------------------------------------------
+    // --- Removed EG Packet --- 
     
     _this.startTime=Date.now();
+    _this.totalSize = 0; // Reset total size for this send batch
     _this.sentCounter=0;
     let sendCount=speedTest_sendCount;
 
     try {
       for (let iter = 0; iter < sendCount; iter++) {
-        // Encode and send each packet in the group individually
+        // Send the packets (just the TX packet in this simple case)
         for (const packet of packetsToSend) {
-          // Adjust group ID per iteration if sending multiple full groups
-          // For simplicity here, we send the same group multiple times
-          // but could create unique group IDs like: packet.group_id = currentGroupId + iter;
+          // Potentially adjust group ID per iteration if needed:
+          // packet.group_id = currentGroupId + iter; 
           const encodedPacket = bpgEncoder.encodePacket(packet);
           channel.send(encodedPacket);
           _this.totalSize += encodedPacket.length;
@@ -177,12 +168,12 @@ function App() {
   // --- BPG Callbacks --- 
   const handleBpgPacket: PacketCallback = (packet) => {
     console.log("[BPG RX Packet]", packet);
-    let contentPreview = "";
+    let contentPreview = `TL:${packet.tl}, EG:${packet.is_end_of_group ? 'Y' : 'N'}, `; // Show EG Flag
     if (packet.content.metadata_str) {
       contentPreview += `Meta: ${packet.content.metadata_str.substring(0, 50)}${packet.content.metadata_str.length > 50 ? '...' : ''}`;
     }
     if (packet.content.binary_bytes.length > 0) {
-      contentPreview += `${contentPreview ? ', ' : ''}Bin Size: ${packet.content.binary_bytes.length}`;
+      contentPreview += `${packet.content.metadata_str ? ', ' : ''}Bin Size: ${packet.content.binary_bytes.length}`;
       
       // Add Hex Preview
       const maxHexBytes = 64;
@@ -201,7 +192,7 @@ function App() {
         } catch (e) { /* ignore decoding error */ }
       }
     }
-    setMessages(prev => [...prev, `[BPG Packet] GID:${packet.group_id}, TL:${packet.tl}, Content: ${contentPreview}`]);
+    setMessages(prev => [...prev, `[BPG Packet] GID:${packet.group_id}, ${contentPreview}`]);
   };
 
   const handleBpgGroup: GroupCallback = (groupId, group) => {
