@@ -13,14 +13,14 @@
 
 // Helper function to print packet details
 void printAppPacket(const BPG::AppPacket& packet) {
-    std::cout << "  Packet GroupID: " << packet.group_id
-              << ", TargetID: " << packet.target_id
+    std::cout << "  Packet GroupID: " << std::hex << packet.group_id << std::dec // Show hex ID for clarity
+              << ", TargetID: " << std::hex << packet.target_id << std::dec
               << ", Type: " << std::string(packet.tl, 2) << std::endl;
     std::cout << "    Content: [HybridData] Meta: " <<
-        (packet.content.metadata_json.empty() ? "<empty>" : packet.content.metadata_json)
-              << ", Binary Size: " << packet.content.binary_bytes.size() << " bytes" << std::endl;
+        (packet.content.metadata_str.empty() ? "<empty>" : packet.content.metadata_str) // Use metadata_str
+              << ", Binary Size: " << std::hex << packet.content.binary_bytes.size() << std::dec << " bytes" << std::endl;
     // Optionally show binary content if it's likely text
-    if (packet.content.metadata_json.empty() && !packet.content.binary_bytes.empty() && packet.content.binary_bytes.size() < 100) { // Heuristic
+    if (packet.content.metadata_str.empty() && !packet.content.binary_bytes.empty() && packet.content.binary_bytes.size() < 100) { // Heuristic
         std::string potential_text(packet.content.binary_bytes.begin(), packet.content.binary_bytes.end());
         bool is_printable = true;
         for(char c : potential_text) {
@@ -50,7 +50,7 @@ int testCase_InterleavedGroups() {
     uint32_t target_id_101 = 50;
     std::string report_str_101 = "{\"status\":\"processing\",\"progress\":0.75}";
     std::string eg_str_101 = "{\"ack\":true}";
-    cv::Mat original_image(48, 64, CV_8UC3, cv::Scalar(100, 150, 200)); // Keep original for verification
+    cv::Mat original_image(5, 5, CV_8UC3, cv::Scalar(100, 150, 200)); // Keep original for verification
     {
         // Image Packet (Group 101)
         BPG::AppPacket img_packet;
@@ -58,14 +58,34 @@ int testCase_InterleavedGroups() {
         img_packet.target_id = target_id_101;
         std::memcpy(img_packet.tl, "IM", 2);
         // cv::Mat original_image(48, 64, CV_8UC3, cv::Scalar(100, 150, 200));
-        for (int r = 0; r < original_image.rows; ++r) { for (int c = 0; c < original_image.cols; ++c) { original_image.at<cv::Vec3b>(r, c)[0] = (r * 4) % 256; original_image.at<cv::Vec3b>(r, c)[1] = (c * 4) % 256; original_image.at<cv::Vec3b>(r, c)[2] = (r + c) % 256; }}
+        // for (int r = 0; r < original_image.rows; ++r) { for (int c = 0; c < original_image.cols; ++c) { original_image.at<cv::Vec3b>(r, c)[0] = (r * 4) % 256; original_image.at<cv::Vec3b>(r, c)[1] = (c * 4) % 256; original_image.at<cv::Vec3b>(r, c)[2] = (r + c) % 256; }}
         BPG::HybridData img_hybrid_data;
         std::string image_format = ".jpg";
-        std::vector<int> encode_params = {cv::IMWRITE_JPEG_QUALITY, 90};
-        bool encode_success = cv::imencode(image_format, original_image, img_hybrid_data.binary_bytes, encode_params);
-        if (!encode_success) { std::cerr << "Error encoding image (101)\n"; return 1; }
-        img_hybrid_data.metadata_json = "{\"width\": " + std::to_string(original_image.cols) + ", \"height\": " + std::to_string(original_image.rows) + ", \"channels\": " + std::to_string(original_image.channels()) + ", \"format\": \"" + image_format.substr(1) + "\"}";
+
+        if(image_format == ".jpg") {
+            std::vector<int> encode_params = {cv::IMWRITE_JPEG_QUALITY, 90};
+            bool encode_success = cv::imencode(image_format, original_image, img_hybrid_data.binary_bytes, encode_params);
+            if (!encode_success) { std::cerr << "Error encoding image (101)\n"; return 1; }
+        } else if(image_format == "raw") {
+            std::vector<int> encode_params = {cv::IMWRITE_PNG_COMPRESSION, 9};
+            bool encode_success = cv::imencode(image_format, original_image, img_hybrid_data.binary_bytes, encode_params);
+            if (!encode_success) { std::cerr << "Error encoding image (101)\n"; return 1; }
+        }
+
+
+        img_hybrid_data.metadata_str = "{\"width\": " + std::to_string(original_image.cols) + ", \"height\": " + std::to_string(original_image.rows) + ", \"channels\": " + std::to_string(original_image.channels()) + ", \"format\": \"" + image_format.substr(1) + "\"}";
         img_packet.content = std::move(img_hybrid_data);
+
+        // {
+        //     //print img_packet encode packet
+        //     std::cout << "img_packet encode binary stream: " << std::endl;
+        //     BPG::BinaryData stream_buffer;
+        //     encoder.encodePacket(img_packet, stream_buffer);
+        //     for (size_t i = 0; i < stream_buffer.size(); ++i) {
+        //         std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)stream_buffer[i] << " ";
+        //     }
+        //     std::cout << std::endl;
+        // }
         group_101.push_back(img_packet);
         printAppPacket(img_packet);
 
@@ -229,7 +249,7 @@ int testCase_InterleavedGroups() {
     if (strncmp(received_group_102[1].tl, "EG", 2) != 0) { std::cerr << "Verification FAILED (102): Packet 1 type mismatch" << std::endl; return 1; }
     
     const BPG::HybridData& received_text_hybrid_102 = received_group_102[0].content;
-    if (!received_text_hybrid_102.metadata_json.empty()) { std::cerr << "Verification FAILED (102): Text metadata not empty" << std::endl; return 1; }
+    if (!received_text_hybrid_102.metadata_str.empty()) { std::cerr << "Verification FAILED (102): Text metadata not empty" << std::endl; return 1; }
     std::string received_text_str_102(received_text_hybrid_102.binary_bytes.begin(), received_text_hybrid_102.binary_bytes.end());
     if (received_text_str_102 != text_str_102) {
         std::cerr << "Verification FAILED (102): Text content mismatch" << std::endl; return 1;
@@ -308,9 +328,13 @@ int testCase_EmptyGroup() {
      if (received_group[0].group_id != group_id) { std::cerr << "Verification FAILED: Group ID mismatch" << std::endl; return 1; }
      if (strncmp(received_group[0].tl, "EG", 2) != 0) { std::cerr << "Verification FAILED: Packet type not EG" << std::endl; return 1; }
     
-    std::string received_eg_str(received_group[0].content.binary_bytes.begin(), received_group[0].content.binary_bytes.end());
+    const BPG::HybridData& received_eg_hybrid = received_group[0].content;
+    if (!received_eg_hybrid.metadata_str.empty()) { // Check metadata_str
+        std::cerr << "Verification FAILED (Empty): EG metadata not empty" << std::endl; return 1; 
+    }
+    std::string received_eg_str(received_eg_hybrid.binary_bytes.begin(), received_eg_hybrid.binary_bytes.end());
      if (received_eg_str != eg_str) {
-         std::cerr << "Verification FAILED: EG content mismatch. Expected '"<< eg_str << "', got '" << received_eg_str << "'" << std::endl;
+         std::cerr << "Verification FAILED (Empty): EG content mismatch. Expected '"<< eg_str << "', got '" << received_eg_str << "'" << std::endl;
          return 1;
      }
     std::cout << "Empty Group PASSED." << std::endl;

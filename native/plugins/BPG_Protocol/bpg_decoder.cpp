@@ -2,10 +2,17 @@
 #include <cstring> // For memcpy, memcmp
 #include <arpa/inet.h> // For ntohl, htonl (assuming network byte order)
 #include <iostream> // For potential debug output
-#include <algorithm> // For std::copy
-#include <iterator> // For std::make_move_iterator
+#include <algorithm> // For std::copy, std::copy_n, std::min
+#include <iterator> // For std::make_move_iterator, std::next
+#include <iomanip> // For std::setw, std::setfill
+#include <vector> // For temporary contiguous buffer
 
 namespace BPG {
+
+// --- Forward Declarations for new helpers ---
+static bool parseHeaderFromBuffer(const uint8_t* buffer_start, size_t buffer_len, PacketHeader& out_header);
+static BpgError parseDataFromBuffer(const PacketHeader& header, const uint8_t* data_start, HybridData& out_data);
+// ---
 
 BpgDecoder::BpgDecoder() = default;
 
@@ -14,16 +21,16 @@ void BpgDecoder::reset() {
     active_groups_.clear();
 }
 
-bool BpgDecoder::deserializeHeader(const std::deque<uint8_t>& buffer, PacketHeader& out_header) {
-    if (buffer.size() < sizeof(PacketHeader)) return false;
+// --- New Helper: Parse Header from contiguous buffer ---
+static bool parseHeaderFromBuffer(const uint8_t* buffer_start, size_t buffer_len, PacketHeader& out_header) {
+    // Check if the provided buffer is large enough for the fixed header size
+    if (!buffer_start || buffer_len < BPG_HEADER_SIZE) { // Use BPG_HEADER_SIZE here
+        std::cerr << "[BPG Decode ERR] parseHeaderFromBuffer called with invalid args: buffer_start=" 
+                  << (void*)buffer_start << ", buffer_len=" << buffer_len << " (expected >= " << BPG_HEADER_SIZE << ")" << std::endl;
+        return false;
+    }
 
-    uint8_t header_bytes[sizeof(PacketHeader)];
-    // Copy header bytes from deque to a temporary array for easy memcpy
-    // This is a small, fixed-size copy.
-    std::copy_n(buffer.begin(), sizeof(PacketHeader), header_bytes);
-
-    const uint8_t* ptr = header_bytes;
-
+    const uint8_t* ptr = buffer_start;
     uint32_t group_id_n, target_id_n, data_length_n;
 
     std::memcpy(&group_id_n, ptr, sizeof(group_id_n)); ptr += sizeof(group_id_n);
@@ -34,105 +41,165 @@ bool BpgDecoder::deserializeHeader(const std::deque<uint8_t>& buffer, PacketHead
     out_header.group_id = ntohl(group_id_n);
     out_header.target_id = ntohl(target_id_n);
     out_header.data_length = ntohl(data_length_n);
-
     return true;
 }
 
-// Always deserializes into HybridData
-BpgError BpgDecoder::deserializeAppData(const PacketHeader& header,
-                                std::deque<uint8_t>::const_iterator data_start,
-                                HybridData& out_data) { // Changed argument type
-    // Calculate end iterator based on length
-    auto data_end = data_start + header.data_length;
+// --- New Helper: Parse Data from contiguous buffer ---
+static BpgError parseDataFromBuffer(const PacketHeader& header, const uint8_t* data_start, HybridData& out_data) {
+     if (!data_start) {
+         std::cerr << "[BPG Decode ERR] parseDataFromBuffer called with null data_start for TL: " << std::string(header.tl, 2) << std::endl;
+         return BpgError::DecodingError; 
+     }
 
-    // ALL data is treated as potential HybridData (json_len + json + binary)
-    if (header.data_length < sizeof(uint32_t)) {
-        // Allow empty payload or payload smaller than json_len field?
-        // If we require json_len, then this is an error.
-        // If payload can be purely binary (no json), need different handling.
-        // Assuming for now all packets *must* have the 4-byte json_len field,
-        // even if the length is 0.
-        return BpgError::DecodingError; // Not enough data even for JSON length field
-    }
+     const uint8_t* data_end = data_start + header.data_length; 
 
-    auto current_iter = data_start;
-
-    // 1. Read JSON length (copy 4 bytes)
-    uint8_t json_len_bytes[sizeof(uint32_t)];
-    std::copy_n(current_iter, sizeof(uint32_t), json_len_bytes);
-    current_iter += sizeof(uint32_t);
-    uint32_t json_len_n;
-    std::memcpy(&json_len_n, json_len_bytes, sizeof(json_len_n));
-    uint32_t json_len = ntohl(json_len_n);
-
-    // Check consistency: json_len should not exceed remaining data length
-    if (sizeof(uint32_t) + json_len > header.data_length) {
+    // Check required size for string length field
+    constexpr size_t STR_LENGTH_SIZE = sizeof(uint32_t);
+    if (header.data_length < STR_LENGTH_SIZE) {
+        std::cerr << "[BPG Decode ERR] HdrDataLen (" << header.data_length
+                  << ") < StrLenSize (" << STR_LENGTH_SIZE << ") for TL: "
+                  << std::string(header.tl, 2) << std::endl;
         return BpgError::DecodingError;
     }
 
-    // 2. Read JSON metadata string (copy)
-    if (json_len > 0) {
-        std::string temp_json(json_len, '\0');
-        std::copy(current_iter, current_iter + json_len, temp_json.begin());
-        out_data.metadata_json = std::move(temp_json);
-    }
-    current_iter += json_len;
+    const uint8_t* current_ptr = data_start;
 
-    // 3. Read remaining binary bytes (copy)
-    size_t binary_bytes_len = header.data_length - sizeof(uint32_t) - json_len;
-    if (binary_bytes_len > 0) {
-        out_data.binary_bytes.resize(binary_bytes_len);
-        std::copy(current_iter, data_end, out_data.binary_bytes.begin());
+    // 1. Read string length
+    uint32_t str_len_n;
+    if (current_ptr + STR_LENGTH_SIZE > data_end) { 
+         std::cerr << "[BPG Decode ERR] Incomplete data reading str length for TL: " << std::string(header.tl, 2) << std::endl;
+         return BpgError::IncompletePacket;
+    }
+    std::memcpy(&str_len_n, current_ptr, STR_LENGTH_SIZE);
+    current_ptr += STR_LENGTH_SIZE;
+    uint32_t str_len = ntohl(str_len_n);
+
+     // Verify consistency check
+    if (STR_LENGTH_SIZE + str_len > header.data_length) {
+        std::cerr << "[BPG Decode ERR] StrLen+Hdr (" << (STR_LENGTH_SIZE + str_len)
+                  << ") > HdrDataLen (" << header.data_length
+                  << ") | str_len_n=0x" << std::hex << str_len_n << std::dec
+                  << ", str_len=" << str_len
+                  << ", TL: " << std::string(header.tl, 2) << std::endl;
+        return BpgError::DecodingError;
+    }
+
+    // 2. Read metadata string
+    out_data.metadata_str.clear();
+    if (str_len > 0) {
+        if (current_ptr + str_len > data_end) {
+             std::cerr << "[BPG Decode ERR] Incomplete metadata string data for TL: " << std::string(header.tl, 2) << std::endl;
+             return BpgError::IncompletePacket;
+        }
+        out_data.metadata_str.assign(reinterpret_cast<const char*>(current_ptr), str_len);
+        current_ptr += str_len;
+    }
+
+    // 3. Read remaining binary bytes
+    out_data.binary_bytes.clear();
+    size_t binary_bytes_len = header.data_length - STR_LENGTH_SIZE - str_len;
+     if (binary_bytes_len > 0) {
+        if (current_ptr + binary_bytes_len > data_end) {
+            std::cerr << "[BPG Decode ERR] Incomplete Binary data for TL: " << std::string(header.tl, 2) << std::endl;
+             return BpgError::IncompletePacket;
+        }
+        out_data.binary_bytes.assign(current_ptr, current_ptr + binary_bytes_len);
     }
 
     return BpgError::Success;
 }
 
-// Use deque and efficient removal
-bool BpgDecoder::tryParsePacket(std::deque<uint8_t>& buffer, 
+// --- Refactored tryParsePacket ---
+bool BpgDecoder::tryParsePacket(std::deque<uint8_t>& buffer,
                             const AppPacketCallback& packet_callback,
                             const AppPacketGroupCallback& group_callback) {
-    if (buffer.size() < sizeof(PacketHeader)) { return false; }
-    PacketHeader header;
-    if (!deserializeHeader(const_cast<const std::deque<uint8_t>&>(buffer), header)) { reset(); return false; }
-    size_t total_packet_size = sizeof(PacketHeader) + header.data_length;
-    if (buffer.size() < total_packet_size) { return false; }
-
-    AppPacket app_packet;
-    app_packet.group_id = header.group_id;
-    app_packet.target_id = header.target_id;
-    std::memcpy(app_packet.tl, header.tl, sizeof(PacketType));
-
-    // Deserialize directly into app_packet.content (which is HybridData)
-    BpgError data_err = deserializeAppData(header, 
-                                        buffer.cbegin() + sizeof(PacketHeader),
-                                        app_packet.content); // Pass content directly
-
-    if (data_err == BpgError::Success) {
-         active_groups_[app_packet.group_id].push_back(std::move(app_packet)); 
-    } else {
-         std::cerr << "BPG Decoder: Error deserializing app data for packet type "
-                   << std::string(header.tl, 2) << std::endl;
+    // --- Step 1: Check if enough data for header using constant size --- 
+    if (buffer.size() < BPG_HEADER_SIZE) { // Use constant
+        return false; // Not enough data yet
     }
 
-    bool is_end_group = (data_err == BpgError::Success && strncmp(app_packet.tl, "EG", 2) == 0);
-    uint32_t completed_group_id = (is_end_group) ? app_packet.group_id : 0;
+    // --- Step 2: Peek at header to get data_length --- 
+    // Copy exactly BPG_HEADER_SIZE bytes for peeking
+    uint8_t header_peek_bytes[BPG_HEADER_SIZE]; // Use constant
+    std::copy_n(buffer.begin(), BPG_HEADER_SIZE, header_peek_bytes); // Use constant
+    PacketHeader peek_header;
+    // Pass BPG_HEADER_SIZE as the length we copied
+    if (!parseHeaderFromBuffer(header_peek_bytes, BPG_HEADER_SIZE, peek_header)) { 
+         std::cerr << "[BPG Decode ERR] Header peek failed during parseHeaderFromBuffer." << std::endl;
+         reset(); 
+         return false; 
+    }
+    uint32_t data_length = peek_header.data_length;
+    // Calculate total size using the constant
+    size_t total_packet_size = BPG_HEADER_SIZE + data_length; 
+    
+    // --- Step 3: Check if enough data for the *entire* packet --- 
+    if (buffer.size() < total_packet_size) {
+        return false; // Not enough data yet
+    }
 
+    // --- Step 4: Copy the full potential packet data to a contiguous buffer --- 
+    std::vector<uint8_t> temp_packet_buffer(total_packet_size);
+    std::copy_n(buffer.begin(), total_packet_size, temp_packet_buffer.begin());
+
+    // --- Step 5: Parse Header and Data from the contiguous buffer --- 
+    PacketHeader header; 
+    HybridData hybrid_data; 
+
+    // Parse header from temp buffer, passing its actual size
+    if (!parseHeaderFromBuffer(temp_packet_buffer.data(), temp_packet_buffer.size(), header)) {
+         std::cerr << "[BPG Decode ERR] Header parse failed on temp buffer." << std::endl;
+         buffer.erase(buffer.begin(), buffer.begin() + total_packet_size);
+         return true; 
+    }
+    if (header.data_length != data_length) {
+         std::cerr << "[BPG Decode ERR] Peeked data length (" << data_length 
+                   << ") != Parsed data length (" << header.data_length << "). Corrupted header? Discarding." << std::endl;
+         buffer.erase(buffer.begin(), buffer.begin() + total_packet_size);
+         return true;
+    }
+
+    // Parse data from temp buffer (pointing after the fixed header size)
+    BpgError data_err = parseDataFromBuffer(header, temp_packet_buffer.data() + BPG_HEADER_SIZE, hybrid_data);
+
+    // --- Step 6: Consume data from the main deque buffer --- 
     buffer.erase(buffer.begin(), buffer.begin() + total_packet_size);
 
+    // --- Step 7: Process the successfully parsed packet (if applicable) --- 
     if (data_err == BpgError::Success) {
-        if (packet_callback) {
-            packet_callback(active_groups_[header.group_id].back());
+        AppPacket app_packet;
+        app_packet.group_id = header.group_id;
+        app_packet.target_id = header.target_id;
+        std::memcpy(app_packet.tl, header.tl, sizeof(PacketType));
+        app_packet.content = std::move(hybrid_data); 
+
+        if (!active_groups_.count(app_packet.group_id)) {
+            active_groups_[app_packet.group_id] = {}; 
         }
-        
-        if (is_end_group && group_callback) {
-            auto group_iter = active_groups_.find(completed_group_id);
+        active_groups_[app_packet.group_id].push_back(std::move(app_packet)); 
+
+        const auto& stored_packet = active_groups_[header.group_id].back(); 
+
+        if (packet_callback) {
+            try { packet_callback(stored_packet); } catch(const std::exception& e) { 
+                 std::cerr << "[BPG ERR] Exception in packet_callback: " << e.what() << std::endl;
+             } catch(...) { std::cerr << "[BPG ERR] Unknown exception in packet_callback" << std::endl; }
+        }
+
+        if (strncmp(stored_packet.tl, "EG", 2) == 0 && group_callback) {
+            auto group_iter = active_groups_.find(stored_packet.group_id);
             if (group_iter != active_groups_.end()) {
-                group_callback(completed_group_id, std::move(group_iter->second));
+                 try { group_callback(stored_packet.group_id, std::move(group_iter->second)); } catch(const std::exception& e) {
+                     std::cerr << "[BPG ERR] Exception in group_callback: " << e.what() << std::endl;
+                 } catch(...) { std::cerr << "[BPG ERR] Unknown exception in group_callback" << std::endl; }
                 active_groups_.erase(group_iter);
             }
         }
+    } else {
+        std::cerr << "BPG Decoder: Error deserializing app data for packet type "
+                  << std::string(header.tl, 2) << " (Error code: " << static_cast<int>(data_err) << ")" << std::endl;
     }
+
     return true; 
 }
 
@@ -144,11 +211,20 @@ BpgError BpgDecoder::processData(const uint8_t* data, size_t len,
     }
 
     // Append incoming data to the internal buffer (deque insert)
-    internal_buffer_.insert(internal_buffer_.end(), data, data + len);
+    // This copy handles the volatility of the input 'data' pointer
+    try {
+        internal_buffer_.insert(internal_buffer_.end(), data, data + len);
+    } catch (const std::exception& e) {
+        std::cerr << "[BPG Decode ERR] Failed to insert data into deque buffer: " << e.what() << std::endl;
+        // Depending on severity, might want to clear buffer or just return error
+        // reset(); 
+        return BpgError::DecodingError; // Or a more specific error like BufferError
+    }
+
 
     // Process as many complete packets as possible
     while (tryParsePacket(internal_buffer_, packet_callback, group_callback)) {
-        // Loop continues
+        // Loop continues as long as tryParsePacket returns true (meaning it processed something)
     }
 
     return BpgError::Success;
