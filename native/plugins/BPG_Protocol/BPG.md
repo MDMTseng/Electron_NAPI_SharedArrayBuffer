@@ -9,11 +9,11 @@ Each logical message sent over the link layer consists of one or more BPG packet
 Each individual BPG packet follows this structure:
 
 ```
-+----------------------------------------------------+------------------------------------------+
-|             Packet Header (18 bytes)               |           Packet Data (Variable)         |
-+----------------------------------------------------+------------------------------------------+
-| GroupID | TargetID | TL | Prop | DataLen | StrLen | Metadata String | Binary Data    |
-+---------+----------+----+------+---------+--------+-----------------+----------------+
++----------------------------------------------------+--------------------------------------------+
+|             Packet Header (18 bytes)               |             Packet Data (Variable)         |
++----------------------------------------------------+--------------------------------------------+
+| GroupID:4 | TargetID:4 | TL:2 | Prop:4 | DataLen:4 | StrLen:4 | Metadata String | Binary Data   |
++-----------+------------+------+--------+-----------+----------+-----------------+---------------+
 ```
 *Note: `StrLen`, `Metadata String`, and `Binary Data` constitute the Packet Data section.*
 
@@ -25,7 +25,7 @@ Each individual BPG packet follows this structure:
 |-------------|--------------|---------------|-------------------------------------------------|---------------|
 | `group_id`  | 4            | `uint32_t`    | Identifier for the packet group.                | **Big Endian**  |
 | `target_id` | 4            | `uint32_t`    | Identifier for the target recipient/context.    | **Big Endian**  |
-| `tl`        | 2            | `char[2]`     | Two-letter ASCII packet type identifier (e.g., "IM", "TX"). | N/A (bytes)   |
+| `tl`        | 2            | `char[2]`     | Two-letter ASCII packet type identifier (e.g., "IM", "TX"). | N/A (bytes in order)   |
 | `prop`      | 4            | `uint32_t`    | Property bitfield. **See details below.**       | **Big Endian**  |
 | `data_length`| 4           | `uint32_t`    | Total length **in bytes** of the Packet Data section that follows this header (i.e., size of StrLen + Metadata String + Binary Data). | **Big Endian**  |
 
@@ -36,7 +36,7 @@ The `prop` field is a 4-byte (`uint32_t`) space reserved for flags. Currently, o
 ```
 Bit Index: |31...........1|0|
            | Reserved (0) |E|
-                         ^ EG Bit
+                           ^ EG Bit
 ```
 
 *   **EG (End Group) Bit:** `prop & 0x00000001`

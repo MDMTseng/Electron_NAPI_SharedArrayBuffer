@@ -62,30 +62,56 @@ static bool send_acknowledgement_group(uint32_t group_id, uint32_t response_targ
     BPG::BpgEncoder encoder;
     BPG::AppPacketGroup group_to_send; // Will only contain one packet now
 
-    // 1. Acknowledgement Packet - This is the only and last packet
-    BPG::AppPacket ack_packet;
-    ack_packet.group_id = group_id;
-    ack_packet.target_id = response_target_id; 
-    std::memcpy(ack_packet.tl, "AK", 2); 
-    ack_packet.is_end_of_group = true; // Set EG flag HERE
-    BPG::HybridData ack_hybrid_data;
-    std::string ack_str = "{\"acknowledged\":true}";
-    ack_hybrid_data.binary_bytes.assign(ack_str.begin(), ack_str.end());
-    ack_packet.content = std::move(ack_hybrid_data);
-    group_to_send.push_back(ack_packet);
+    {
+        // "IM" Image Packet
+        BPG::AppPacket image_packet;
+        image_packet.group_id = group_id;
+        image_packet.target_id = response_target_id; 
+        std::memcpy(image_packet.tl, "IM", 2); 
+        image_packet.is_end_of_group = false; // Set EG flag HERE
+        BPG::HybridData &image_hybrid_data= image_packet.content;
+        cv::Mat image = cv::Mat(10, 10, CV_8UC3, cv::Scalar(0, 0, 255));
+        image_hybrid_data.metadata_str=
+        "{\"width\":"+std::to_string(image.cols)+
+        ",\"height\":"+std::to_string(image.rows)+
+        ",\"channels\":"+std::to_string(image.channels())+
+        ",\"type\":"+std::to_string(image.type())+"}";
+        image_hybrid_data.binary_bytes.assign(image.data, image.data + image.total() * image.elemSize());
+        group_to_send.push_back(image_packet);
 
-    // Encode and send the single ACK packet
-    BPG::BinaryData encoded_packet_buffer;
-    BPG::BpgError encode_err = encoder.encodePacket(group_to_send[0], encoded_packet_buffer);
-    if (encode_err == BPG::BpgError::Success) {
-        std::cout << "  Sending ACK packet Type: " << std::string(group_to_send[0].tl, 2) << ", Size: " << encoded_packet_buffer.size() << std::endl;
-        g_send_message(encoded_packet_buffer.data(), encoded_packet_buffer.size());
-        return true;
-    } else {
-        std::cerr << "[SamplePlugin BPG] Error encoding ACK packet (Type: "
-                  << std::string(group_to_send[0].tl, 2) << "): " << static_cast<int>(encode_err) << std::endl;
-        return false;
+        
     }
+    
+    {
+        // 1. Acknowledgement Packet - This is the only and last packet
+        BPG::AppPacket ack_packet;
+        ack_packet.group_id = group_id;
+        ack_packet.target_id = response_target_id; 
+        std::memcpy(ack_packet.tl, "AK", 2); 
+        ack_packet.is_end_of_group = true; // Set EG flag HERE
+        BPG::HybridData ack_hybrid_data;
+        std::string ack_str = "{\"acknowledged\":true}";
+        ack_hybrid_data.metadata_str = ack_str;
+        // ack_hybrid_data.binary_bytes.assign(ack_str.begin(), ack_str.end());
+        ack_packet.content = std::move(ack_hybrid_data);
+        group_to_send.push_back(ack_packet);
+
+    }
+
+
+    {
+        BPG::BinaryData encoded_packet_buffer;
+        for(auto pkt:group_to_send)
+        {
+            encoded_packet_buffer.clear();
+            BPG::BpgError encode_err = encoder.encodePacket(pkt, encoded_packet_buffer);
+            if (encode_err == BPG::BpgError::Success) {
+                std::cout << "  Sending packet Type: " << std::string(pkt.tl, 2) << ", Size: " << encoded_packet_buffer.size() << std::endl;
+                g_send_message(encoded_packet_buffer.data(), encoded_packet_buffer.size());
+            }
+        }
+    }
+
 }
 
 // Example function to handle a completed packet group
@@ -101,7 +127,7 @@ static void handle_decoded_group(uint32_t group_id, BPG::AppPacketGroup&& group)
     // --- Echo Back Logic --- 
     if (!group.empty()) {
         uint32_t original_target_id = group[0].target_id; // Assuming target_id is same for the group
-        uint32_t response_target_id = original_target_id + 100;
+        uint32_t response_target_id = original_target_id;
         send_acknowledgement_group(group_id, response_target_id); // Send ACK back
     } else {
          std::cerr << "[SamplePlugin BPG] Warning: Received empty group (ID: " << group_id << "), cannot echo back." << std::endl;
