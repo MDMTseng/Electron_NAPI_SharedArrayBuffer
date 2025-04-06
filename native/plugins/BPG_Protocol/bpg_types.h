@@ -6,7 +6,7 @@
 #include <cstring> // For memcpy
 #include <numeric> // For std::accumulate (can be replaced if needed)
 #include <arpa/inet.h> // For htonl
-#include <memory> // For std::shared_ptr
+// #include <memory> // No longer needed
 #include "buffer_writer.h" // Include BufferWriter definition
 // #include <array> // No longer needed
 
@@ -67,17 +67,12 @@ struct PacketHeader {
 // HybridData structure will now be used for ALL packet content types.
 // Format on the wire: str_length(4) + metadata_str(str_length) + binary_bytes(...)
 struct HybridData {
-    HybridData(){}
     std::string metadata_str; // Describes the binary data. UTF-8 encoded string.
     std::vector<uint8_t> binary_bytes;//if empty, use binary_bytes2
     BufferWriter binary_bytes2;
 
-    // Virtual destructor for polymorphism
-    virtual ~HybridData() = default;
-
     // Calculates the size needed to encode this HybridData instance.
-    // Made virtual in case derived classes have different calculations
-    virtual size_t calculateEncodedSize() const {
+    size_t calculateEncodedSize() const {
         if(binary_bytes.empty()){
             return sizeof(uint32_t) + metadata_str.length() + binary_bytes2.size();
         }else{
@@ -86,8 +81,7 @@ struct HybridData {
     }
 
     // Encodes the HybridData into the provided BufferWriter.
-    // Made virtual in case derived classes have different encoding logic
-    virtual BpgError encode(BufferWriter& writer) const {
+    BpgError encode(BufferWriter& writer) const {
         uint32_t json_len = static_cast<uint32_t>(metadata_str.length());
         uint32_t json_len_n = htonl(json_len);
         size_t required_size = calculateEncodedSize();
@@ -121,26 +115,15 @@ struct AppPacket {
     uint32_t target_id;
     PacketType tl;
     bool is_end_of_group; // Flag to indicate if this is the last packet of the group
-    std::shared_ptr<HybridData> content;
+    HybridData content;
 
+    size_t calculateEncodedSize() const {
+        return BPG_HEADER_SIZE + content.calculateEncodedSize();
+    }
     // Encodes the entire AppPacket (header + content) into the BufferWriter.
     BpgError encode(BufferWriter& writer) const {
-        if (!content) {
-            // Or return a specific error?
-            // For now, assume empty content means 0 data length.
-             uint32_t data_len = 0; 
-             PacketHeader header;
-             header.group_id = group_id;
-             header.target_id = target_id;
-             std::memcpy(header.tl, tl, sizeof(PacketType));
-             header.prop = is_end_of_group ? BPG_PROP_EG_BIT_MASK : 0;
-             header.data_length = data_len;
-             // Only encode header if content is null
-             return header.encode(writer);
-        }
-
-        // 1. Calculate data length (using pointer)
-        uint32_t data_len = static_cast<uint32_t>(content->calculateEncodedSize());
+        // 1. Calculate data length (using direct member access)
+        uint32_t data_len = static_cast<uint32_t>(content.calculateEncodedSize());
 
         // 2. Construct Header
         PacketHeader header;
@@ -162,8 +145,8 @@ struct AppPacket {
             return header_err;
         }
 
-        // 5. Encode Content (using pointer)
-        BpgError content_err = content->encode(writer);
+        // 5. Encode Content (using direct member access)
+        BpgError content_err = content.encode(writer);
         if (content_err != BpgError::Success) {
             return content_err;
         }
