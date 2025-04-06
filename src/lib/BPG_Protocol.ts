@@ -46,21 +46,30 @@ export class BpgEncoder {
         const dataView = new DataView(buffer);
         const packetBytes = new Uint8Array(buffer);
 
-        // --- Header --- 
-        dataView.setUint32(offset, packet.group_id, false); offset += 4;
-        dataView.setUint32(offset, packet.target_id, false); offset += 4;
+        // --- Header (New Order) --- 
+        // TL (2 bytes)
         packetBytes[offset++] = packet.tl.charCodeAt(0);
         packetBytes[offset++] = packet.tl.charCodeAt(1);
         
-        // Prop field (uint32_t)
+        // Prop (4 bytes, Big Endian)
         let propValue = 0;
         if (packet.is_end_of_group) {
-            propValue |= PROP_EG_BIT_MASK; // Set the LSB
+            propValue |= PROP_EG_BIT_MASK; 
         }
-        dataView.setUint32(offset, propValue, false); // Write prop as Big Endian uint32
+        dataView.setUint32(offset, propValue, false); 
         offset += 4;
 
-        dataView.setUint32(offset, dataSize, false); offset += 4;
+        // Target ID (4 bytes, Big Endian)
+        dataView.setUint32(offset, packet.target_id, false); 
+        offset += 4;
+
+        // Group ID (4 bytes, Big Endian)
+        dataView.setUint32(offset, packet.group_id, false); 
+        offset += 4;
+
+        // Data Length (4 bytes, Big Endian)
+        dataView.setUint32(offset, dataSize, false); 
+        offset += 4;
         
         // --- Data (HybridData) ---
         const strBytes = new TextEncoder().encode(packet.content.metadata_str); 
@@ -83,7 +92,7 @@ export class BpgEncoder {
         }
         
         if (offset !== totalSize) {
-             console.warn(`BPG Encoder: Offset mismatch after encoding. Expected ${totalSize}, got ${offset}`);
+             console.warn(`BPG Encoder: Offset mismatch. Expected ${totalSize}, got ${offset}`);
         }
         return packetBytes;
     }
@@ -128,19 +137,19 @@ export class BpgDecoder {
         this.internal_buffer = newData;
 
         while (true) {
-            if (this.internal_buffer.length < HEADER_SIZE) break; // Check against 18-byte size
+            if (this.internal_buffer.length < HEADER_SIZE) break; // 18 bytes
 
             const dataView = new DataView(this.internal_buffer.buffer, this.internal_buffer.byteOffset, this.internal_buffer.byteLength);
             
-            // Deserialize Header
+            // Deserialize Header (New Order)
             let offset = 0;
-            const groupId = dataView.getUint32(offset, false); offset += 4;
-            const targetId = dataView.getUint32(offset, false); offset += 4;
-            const tl = String.fromCharCode(this.internal_buffer[offset], this.internal_buffer[offset+1]); offset += 2;
-            const propValue = dataView.getUint32(offset, false); offset += 4; // Read prop as uint32
-            const dataLength = dataView.getUint32(offset, false); offset += 4;
+            const tl = String.fromCharCode(this.internal_buffer[offset], this.internal_buffer[offset+1]); offset += 2; // TL (2 bytes)
+            const propValue = dataView.getUint32(offset, false); offset += 4;                           // Prop (4 bytes)
+            const targetId = dataView.getUint32(offset, false); offset += 4;                            // Target ID (4 bytes)
+            const groupId = dataView.getUint32(offset, false); offset += 4;                             // Group ID (4 bytes)
+            const dataLength = dataView.getUint32(offset, false); offset += 4;                          // Data Length (4 bytes)
+            
             const totalPacketSize = HEADER_SIZE + dataLength;
-
             if (this.internal_buffer.length < totalPacketSize) break; 
 
             // Check EG Bit from prop field LSB

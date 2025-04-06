@@ -161,28 +161,49 @@ public:
 
     }
 
+    int req_available_buffer(uint32_t wait_ms,uint8_t**ret_buffer,uint32_t *ret_buffer_sapce) {
+        send_buffer_mutex.lock();
+        int isLineBusy=1;
+        for (int i = 0; i < wait_ms; i++) {
+            isLineBusy=control[2].load(std::memory_order_seq_cst);
+            if(isLineBusy==0)break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        if(isLineBusy==1)
+        {
+            send_buffer_mutex.unlock();
+            return -2;
+        }
+
+        *ret_buffer=dataN2R;
+        *ret_buffer_sapce=n2rBufferSize;
+        return 0;
+    }
+
+    int send_current_buffer(uint32_t data_length) {
+        if(data_length==0)
+        {
+            send_buffer_mutex.unlock();
+            return -1;
+        }
+        control[3].store(data_length, std::memory_order_seq_cst);
+        control[2].store(1, std::memory_order_seq_cst);//send
+
+        send_buffer_mutex.unlock();
+        return 0;
+    }
 
     int send_buffer(const uint8_t* data, size_t length,uint32_t wait_ms) {
         if (length <= 0 || length > n2rBufferSize || data==nullptr)return -1;
 
+        uint8_t* buffer=nullptr;
+        uint32_t buffer_sapce=0;
+        int ret=req_available_buffer(wait_ms,&buffer,&buffer_sapce);
+        if(ret!=0)return ret;
 
-        if(1)
-        {
-            std::lock_guard<std::mutex> lock(send_buffer_mutex);
-            int isLineBusy=1;
-            for (int i = 0; i < wait_ms; i++) {
-                isLineBusy=control[2].load(std::memory_order_seq_cst);
-                if(isLineBusy==0)break;
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            }
-            if(isLineBusy==1)return -2;
-
-            control[3].store(length, std::memory_order_seq_cst);
-            memcpy(dataN2R, data, length);
-            control[2].store(1, std::memory_order_seq_cst);
-            return 0;
-
-        }
+        memcpy(buffer,data,length);
+        ret=send_current_buffer(length);
+        return ret;
     }
     
 private:
@@ -248,6 +269,12 @@ SharedMemoryChannel channel;
 void memcpy_to_shared_buffer(const uint8_t* data, size_t length) {
     channel.send_buffer(data,length,1000);
 }
+int req_available_buffer(uint32_t wait_ms,uint8_t** buffer, uint32_t* buffer_sapce) {
+    return channel.req_available_buffer(wait_ms,buffer,buffer_sapce);
+}
+int send_current_buffer(uint32_t data_length) {
+    return channel.send_current_buffer(data_length);
+}
 
 
 Napi::String Hello(const Napi::CallbackInfo& info) {
@@ -311,7 +338,8 @@ Napi::Value LoadPlugin(const Napi::CallbackInfo& info) {
         // Initialize the plugin with our callback
         const PluginInterface* interface = g_plugin_loader.get_interface();
         if (interface) {
-            interface->initialize(memcpy_to_shared_buffer);
+            interface->initialize(memcpy_to_shared_buffer,
+            req_available_buffer,send_current_buffer);
         }
     }
     

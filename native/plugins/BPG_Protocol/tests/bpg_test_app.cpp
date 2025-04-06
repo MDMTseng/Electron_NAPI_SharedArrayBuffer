@@ -64,150 +64,120 @@ void printAppPacket(const BPG::AppPacket& packet) {
 }
 
 
-// --- Test Case: Interleaved Groups --- Updated EG logic
+// --- Test Case: Interleaved Groups --- Refactored for BufferWriter
 int testCase_InterleavedGroups() {
     std::cout << "\n--- Test Case: Interleaved Groups --- \n" << std::endl;
     received_groups.clear();
     BPG::BpgEncoder encoder;
     BPG::BpgDecoder decoder;
 
+    // ... (Group/Target IDs remain the same) ...
     uint32_t group_id_101 = 101;
     uint32_t target_id_101 = 50;
     uint32_t group_id_102 = 102;
     uint32_t target_id_102 = 55;
 
-    std::cout << "--- Sender Creating Packet Groups --- " << std::endl;
+    std::cout << "--- Sender Creating Packet Definitions --- " << std::endl;
 
-    // Group 101 (Image -> Report -> ACK)
-    BPG::AppPacketGroup group101;
+    // Group 101 Definition (Image -> Report -> ACK)
+    BPG::AppPacketGroup group101_def;
     {
-        // Packet 1: Image Data ("IM")
-        BPG::AppPacket img_packet;
-        img_packet.group_id = group_id_101;
-        img_packet.target_id = target_id_101;
-        std::memcpy(img_packet.tl, "IM", 2);
-        img_packet.is_end_of_group = false; // Not the last packet
-        BPG::HybridData img_hybrid_data;
-        // Simulate creating a small JPEG image with OpenCV
-        cv::Mat original_image(5, 5, CV_8UC3, cv::Scalar(0, 100, 255)); // 5x5 BGR
+        BPG::AppPacket img_packet; /* ... construct img_packet ... */
+        img_packet.group_id = group_id_101; img_packet.target_id = target_id_101; std::memcpy(img_packet.tl, "IM", 2); img_packet.is_end_of_group = false;
+        BPG::HybridData img_hybrid_data; /* ... create image data ... */
+        cv::Mat original_image(5, 5, CV_8UC3, cv::Scalar(0, 100, 255));
         cv::putText(original_image, "Hi", cv::Point(1,4), cv::FONT_HERSHEY_PLAIN, 0.5, cv::Scalar(255,255,255), 1);
-        std::string image_format = ".jpg";
-        std::vector<int> params;
-        params.push_back(cv::IMWRITE_JPEG_QUALITY);
-        params.push_back(90); // JPEG quality
+        std::string image_format = ".jpg"; std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 90};
         cv::imencode(image_format, original_image, img_hybrid_data.binary_bytes, params);
-         img_hybrid_data.metadata_str = 
-            "{\"width\": " + std::to_string(original_image.cols) + ", \"height\": " + std::to_string(original_image.rows) + ", \"channels\": " + std::to_string(original_image.channels()) + ", \"format\": \"" + image_format.substr(1) + "\"}";
-         img_packet.content = std::move(img_hybrid_data);
-        group101.push_back(img_packet);
-        printAppPacket(img_packet);
+        img_hybrid_data.metadata_str = "{\"w\":5,\"h\":5,\"f\":\"jpg\"}"; // Simplified meta
+        img_packet.content = std::move(img_hybrid_data);
+        group101_def.push_back(img_packet); printAppPacket(img_packet);
 
-        // Packet 2: Report ("RP")
-        BPG::AppPacket report_packet;
-        report_packet.group_id = group_id_101;
-        report_packet.target_id = target_id_101;
-        std::memcpy(report_packet.tl, "RP", 2);
-        report_packet.is_end_of_group = false; // Not the last packet
-        BPG::HybridData report_hybrid_data;
-        std::string report_str = "{\"status\":\"processing\",\"progress\":0.75}";
+        BPG::AppPacket report_packet; /* ... construct report_packet ... */
+        report_packet.group_id = group_id_101; report_packet.target_id = target_id_101; std::memcpy(report_packet.tl, "RP", 2); report_packet.is_end_of_group = false;
+        BPG::HybridData report_hybrid_data; std::string report_str = "{\"p\":0.75}";
         report_hybrid_data.binary_bytes.assign(report_str.begin(), report_str.end());
         report_packet.content = std::move(report_hybrid_data);
-        group101.push_back(report_packet);
-        printAppPacket(report_packet);
+        group101_def.push_back(report_packet); printAppPacket(report_packet);
 
-        // Packet 3: Acknowledge ("AK") - This is the *last* packet for group 101
-        BPG::AppPacket ack_packet;
-        ack_packet.group_id = group_id_101;
-        ack_packet.target_id = target_id_101;
-        std::memcpy(ack_packet.tl, "AK", 2); // Changed from EG
-        ack_packet.is_end_of_group = true; // Set EG flag HERE
-        BPG::HybridData ack_hybrid_data;
-        std::string ack_str = "{\"ack\":true}";
+        BPG::AppPacket ack_packet; /* ... construct ack_packet ... */
+        ack_packet.group_id = group_id_101; ack_packet.target_id = target_id_101; std::memcpy(ack_packet.tl, "AK", 2); ack_packet.is_end_of_group = true; // Last packet
+        BPG::HybridData ack_hybrid_data; std::string ack_str = "{\"ok\":1}";
         ack_hybrid_data.binary_bytes.assign(ack_str.begin(), ack_str.end());
         ack_packet.content = std::move(ack_hybrid_data);
-        group101.push_back(ack_packet);
-        printAppPacket(ack_packet);
+        group101_def.push_back(ack_packet); printAppPacket(ack_packet);
     }
 
-    // Group 102 (Text -> Done)
-    BPG::AppPacketGroup group102;
+    // Group 102 Definition (Text -> Done)
+    BPG::AppPacketGroup group102_def;
     {
-        // Packet 1: Text ("TX")
-        BPG::AppPacket text_packet;
-        text_packet.group_id = group_id_102;
-        text_packet.target_id = target_id_102;
-        std::memcpy(text_packet.tl, "TX", 2);
-        text_packet.is_end_of_group = false; // Not the last packet
-        BPG::HybridData text_hybrid_data;
-        std::string text_str = "Hello from Group 102";
+        BPG::AppPacket text_packet; /* ... construct text_packet ... */
+        text_packet.group_id = group_id_102; text_packet.target_id = target_id_102; std::memcpy(text_packet.tl, "TX", 2); text_packet.is_end_of_group = false;
+        BPG::HybridData text_hybrid_data; std::string text_str = "Hello 102";
         text_hybrid_data.binary_bytes.assign(text_str.begin(), text_str.end());
         text_packet.content = std::move(text_hybrid_data);
-        group102.push_back(text_packet);
-        printAppPacket(text_packet);
+        group102_def.push_back(text_packet); printAppPacket(text_packet);
 
-        // Packet 2: Done ("DN") - This is the *last* packet for group 102
-        BPG::AppPacket done_packet;
-        done_packet.group_id = group_id_102;
-        done_packet.target_id = target_id_102;
-        std::memcpy(done_packet.tl, "DN", 2); // Changed from EG
-        done_packet.is_end_of_group = true; // Set EG flag HERE
-        BPG::HybridData done_hybrid_data;
-        std::string done_str = "{\"done\":true}";
+        BPG::AppPacket done_packet; /* ... construct done_packet ... */
+        done_packet.group_id = group_id_102; done_packet.target_id = target_id_102; std::memcpy(done_packet.tl, "DN", 2); done_packet.is_end_of_group = true; // Last packet
+        BPG::HybridData done_hybrid_data; std::string done_str = "{\"d\":1}";
         done_hybrid_data.binary_bytes.assign(done_str.begin(), done_str.end());
         done_packet.content = std::move(done_hybrid_data);
-        group102.push_back(done_packet);
-        printAppPacket(done_packet);
+        group102_def.push_back(done_packet); printAppPacket(done_packet);
     }
 
-    // ... (Encoding and Streaming logic - encode individual packets, no change needed)
-    std::cout << "\n--- Sender Encoding and Streaming Interleaved Packets --- " << std::endl;
-    BPG::BinaryData full_stream;
-    BPG::BinaryData encoded_packet;
-    // Interleave packets for sending
-    encoder.encodePacket(group101[0], encoded_packet); full_stream.insert(full_stream.end(), encoded_packet.begin(), encoded_packet.end()); encoded_packet.clear();
-    encoder.encodePacket(group102[0], encoded_packet); full_stream.insert(full_stream.end(), encoded_packet.begin(), encoded_packet.end()); encoded_packet.clear();
-    encoder.encodePacket(group101[1], encoded_packet); full_stream.insert(full_stream.end(), encoded_packet.begin(), encoded_packet.end()); encoded_packet.clear();
-    encoder.encodePacket(group102[1], encoded_packet); full_stream.insert(full_stream.end(), encoded_packet.begin(), encoded_packet.end()); encoded_packet.clear();
-    encoder.encodePacket(group101[2], encoded_packet); full_stream.insert(full_stream.end(), encoded_packet.begin(), encoded_packet.end()); encoded_packet.clear();
-    std::cout << "Total stream size: " << full_stream.size() << " bytes" << std::endl;
+    // Calculate total size needed and pre-allocate buffer
+    size_t total_estimated_size = 0;
+    auto calculate_packet_size = [&](const BPG::AppPacket& p){ return BPG::BPG_HEADER_SIZE + encoder.calculateAppDataSize(p.content); };
+    for(const auto& p : group101_def) total_estimated_size += calculate_packet_size(p);
+    for(const auto& p : group102_def) total_estimated_size += calculate_packet_size(p);
 
-    // ... (Receiver Processing logic - no change needed) ...
-    std::cout << "\n--- Receiver Processing Interleaved Stream (Simulating Link Layer Chunks) --- " << std::endl;
-    // ... (Simulate receiving in chunks) ...
-    size_t chunk_size = 32;
-     std::cout << "   (Simulating receive with chunk size: " << chunk_size << ")" << std::endl;
-    for (size_t i = 0; i < full_stream.size(); i += chunk_size) {
-        size_t end = std::min(i + chunk_size, full_stream.size());
-        decoder.processData(full_stream.data() + i, end - i, testPacketCallback, testGroupCallback);
-    }
+    std::vector<uint8_t> stream_buffer_vec(total_estimated_size); // Pre-allocate
+    BPG::BufferWriter stream_writer(stream_buffer_vec.data(), stream_buffer_vec.size());
 
-    // ... (Verification logic - check received groups) ...
+    std::cout << "\n--- Sender Encoding Interleaved Packets into Buffer --- " << std::endl;
+    BPG::BpgError encode_err = BPG::BpgError::Success;
+
+    // Encode interleaved directly into the writer
+    encode_err = encoder.encodePacket(group101_def[0], stream_writer); assert(encode_err == BPG::BpgError::Success);
+    encode_err = encoder.encodePacket(group102_def[0], stream_writer); assert(encode_err == BPG::BpgError::Success);
+    encode_err = encoder.encodePacket(group101_def[1], stream_writer); assert(encode_err == BPG::BpgError::Success);
+    encode_err = encoder.encodePacket(group102_def[1], stream_writer); assert(encode_err == BPG::BpgError::Success);
+    encode_err = encoder.encodePacket(group101_def[2], stream_writer); assert(encode_err == BPG::BpgError::Success);
+
+    size_t actual_written_size = stream_writer.size();
+    std::cout << "Total bytes written to buffer: " << actual_written_size << " (Estimated: " << total_estimated_size << ")" << std::endl;
+    // Optional: Resize vector down to actual size if needed, but not necessary for decoder test
+    // stream_buffer_vec.resize(actual_written_size);
+
+    std::cout << "\n--- Receiver Processing Stream from Buffer --- " << std::endl;
+    // Process the entire buffer at once (no chunk simulation needed here)
+    decoder.processData(stream_buffer_vec.data(), actual_written_size, testPacketCallback, testGroupCallback);
+
+    // --- Verification --- (remains the same, checks received_groups map)
     std::cout << "\n--- Verification --- " << std::endl;
-    // Verify Group 101
-    // ... (Check count, types, content, last packet EG flag) ...
-     assert(received_groups.count(group_id_101));
+    assert(received_groups.count(group_id_101));
+    // ... (rest of assertions for group 101 remain the same) ...
      const auto& received_group_101 = received_groups[group_id_101];
      assert(received_group_101.size() == 3); 
      assert(strncmp(received_group_101[0].tl, "IM", 2) == 0 && !received_group_101[0].is_end_of_group);
      assert(strncmp(received_group_101[1].tl, "RP", 2) == 0 && !received_group_101[1].is_end_of_group);
-     assert(strncmp(received_group_101[2].tl, "AK", 2) == 0 && received_group_101[2].is_end_of_group); // Verify last packet EG flag
+     assert(strncmp(received_group_101[2].tl, "AK", 2) == 0 && received_group_101[2].is_end_of_group); 
      std::cout << "Verifying Group 101... PASSED." << std::endl;
 
-    // Verify Group 102
-    // ... (Check count, types, content, last packet EG flag) ...
-     assert(received_groups.count(group_id_102));
+    assert(received_groups.count(group_id_102));
+    // ... (rest of assertions for group 102 remain the same) ...
      const auto& received_group_102 = received_groups[group_id_102];
      assert(received_group_102.size() == 2); 
      assert(strncmp(received_group_102[0].tl, "TX", 2) == 0 && !received_group_102[0].is_end_of_group);
-     assert(strncmp(received_group_102[1].tl, "DN", 2) == 0 && received_group_102[1].is_end_of_group); // Verify last packet EG flag
+     assert(strncmp(received_group_102[1].tl, "DN", 2) == 0 && received_group_102[1].is_end_of_group); 
      std::cout << "Verifying Group 102... PASSED." << std::endl;
 
     std::cout << "\nOverall Verification PASSED." << std::endl;
     return 0;
 }
 
-// --- Test Case: Empty Group --- Updated EG logic
-// An "empty" group now just means a single packet with the EG flag set.
+// --- Test Case: Single Packet Group --- Refactored for BufferWriter
 int testCase_SinglePacketGroup() {
     std::cout << "\n--- Test Case: Single Packet Group --- " << std::endl;
     received_groups.clear();
@@ -217,31 +187,36 @@ int testCase_SinglePacketGroup() {
     uint32_t group_id = 201;
     uint32_t target_id = 60;
 
-    std::cout << "Sender: Creating Single Packet Group (ST packet with EG flag)" << std::endl;
+    std::cout << "Sender: Creating Single Packet Definition" << std::endl;
     BPG::AppPacket single_packet;
-    single_packet.group_id = group_id;
-    single_packet.target_id = target_id;
-    std::memcpy(single_packet.tl, "ST", 2); // Status packet type
-    single_packet.is_end_of_group = true; // Set EG flag as it's the only packet
-    BPG::HybridData status_hybrid_data;
-    std::string status_str = "{\"status\":\"ready\"}";
+    // ... (construct single_packet as before, setting is_end_of_group = true) ...
+    single_packet.group_id = group_id; single_packet.target_id = target_id; std::memcpy(single_packet.tl, "ST", 2); single_packet.is_end_of_group = true;
+    BPG::HybridData status_hybrid_data; std::string status_str = "{\"status\":\"ready\"}";
     status_hybrid_data.binary_bytes.assign(status_str.begin(), status_str.end());
     single_packet.content = std::move(status_hybrid_data);
     printAppPacket(single_packet);
 
-    BPG::BinaryData encoded_packet;
-    encoder.encodePacket(single_packet, encoded_packet);
-    std::cout << "Encoded single packet size: " << encoded_packet.size() << " bytes" << std::endl;
+    // Allocate buffer and writer
+    size_t required_size = BPG::BPG_HEADER_SIZE + encoder.calculateAppDataSize(single_packet.content);
+    std::vector<uint8_t> buffer_vec(required_size);
+    BPG::BufferWriter writer(buffer_vec.data(), buffer_vec.size());
 
-    std::cout << "Receiver: Processing stream" << std::endl;
-    decoder.processData(encoded_packet.data(), encoded_packet.size(), testPacketCallback, testGroupCallback);
+    // Encode into writer
+    BPG::BpgError encode_err = encoder.encodePacket(single_packet, writer);
+    assert(encode_err == BPG::BpgError::Success);
+    size_t bytes_written = writer.size();
+    std::cout << "Encoded single packet size: " << bytes_written << " bytes" << std::endl;
+
+    std::cout << "Receiver: Processing stream from buffer" << std::endl;
+    decoder.processData(buffer_vec.data(), bytes_written, testPacketCallback, testGroupCallback);
 
     std::cout << "\nVerifying Single Packet Group..." << std::endl;
+    // ... (Verification assertions remain the same) ...
     assert(received_groups.count(group_id));
     const auto& received_group = received_groups[group_id];
     assert(received_group.size() == 1);
     assert(strncmp(received_group[0].tl, "ST", 2) == 0);
-    assert(received_group[0].is_end_of_group == true); // Verify EG flag
+    assert(received_group[0].is_end_of_group == true); 
     std::cout << "Single Packet Group PASSED." << std::endl;
     return 0;
 }

@@ -28,13 +28,21 @@ typedef struct {
 // Message callback type
 typedef void (*MessageCallback)(const uint8_t* data, size_t length);
 
+typedef int (*BufferRequestCallback)(uint32_t wait_ms,uint8_t** buffer, uint32_t* buffer_sapce);
+
+typedef int (*BufferSendCallback)(uint32_t data_length);
+
+
 // Plugin interface
 typedef struct {
     // Plugin information
     PluginInfo info;
     
     // Initialize the plugin
-    PluginStatus (*initialize)(MessageCallback callback);
+    PluginStatus (*initialize)(
+        MessageCallback callback,
+        BufferRequestCallback buffer_request_callback,
+        BufferSendCallback buffer_send_callback);
     
     // Cleanup and shutdown the plugin
     void (*shutdown)();

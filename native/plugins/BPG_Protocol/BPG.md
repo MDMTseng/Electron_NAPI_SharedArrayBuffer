@@ -12,8 +12,8 @@ Each individual BPG packet follows this structure:
 +----------------------------------------------------+--------------------------------------------+
 |             Packet Header (18 bytes)               |             Packet Data (Variable)         |
 +----------------------------------------------------+--------------------------------------------+
-| GroupID:4 | TargetID:4 | TL:2 | Prop:4 | DataLen:4 | StrLen:4 | Metadata String | Binary Data   |
-+-----------+------------+------+--------+-----------+----------+-----------------+---------------+
+| TL:2 | Prop:4 | TargetID:4 | GroupID:4 | DataLen:4 | StrLen:4 | Metadata String | Binary Data   |
++------+--------+------------+-----------+-----------+----------+-----------------+---------------+
 ```
 *Note: `StrLen`, `Metadata String`, and `Binary Data` constitute the Packet Data section.*
 
@@ -23,11 +23,11 @@ Each individual BPG packet follows this structure:
 
 | Field       | Size (Bytes) | C++ Type      | Description                                     | Network Order |
 |-------------|--------------|---------------|-------------------------------------------------|---------------|
-| `group_id`  | 4            | `uint32_t`    | Identifier for the packet group.                | **Big Endian**  |
-| `target_id` | 4            | `uint32_t`    | Identifier for the target recipient/context.    | **Big Endian**  |
 | `tl`        | 2            | `char[2]`     | Two-letter ASCII packet type identifier (e.g., "IM", "TX"). | N/A (bytes in order)   |
 | `prop`      | 4            | `uint32_t`    | Property bitfield. **See details below.**       | **Big Endian**  |
-| `data_length`| 4           | `uint32_t`    | Total length **in bytes** of the Packet Data section that follows this header (i.e., size of StrLen + Metadata String + Binary Data). | **Big Endian**  |
+| `target_id` | 4            | `uint32_t`    | Identifier for the target recipient/context.    | **Big Endian**  |
+| `group_id`  | 4            | `uint32_t`    | Identifier for the packet group.                | **Big Endian**  |
+| `data_length`| 4           | `uint32_t`    | Total length **in bytes** of the Packet Data section that follows this header. | **Big Endian**  |
 
 #### `prop` Field Details:
 
@@ -58,10 +58,10 @@ The format of the data section corresponds to the `HybridData` structure. It alw
 
 Let's say the application sends a text message "Done" as the final packet of Group 301 to Target 11.
 
-*   `group_id`: 301 (0x0000012D)
-*   `target_id`: 11 (0x0000000B)
 *   `tl`: "TX" (0x54, 0x58)
 *   `prop`: 1 (EG bit set, other bits 0) -> Network Order: 0x00000001
+*   `target_id`: 11 (0x0000000B)
+*   `group_id`: 301 (0x0000012D)
 *   `metadata_str`: "" (empty) -> `str_length` = 0 (0x00000000)
 *   `binary_bytes`: "Done" (0x44, 0x6F, 0x6E, 0x65) -> `binary_bytes_len` = 4
 *   `data_length`: 4 (str_length field) + 0 (metadata) + 4 (binary) = 8 (0x00000008)
@@ -70,10 +70,10 @@ The resulting byte stream would be:
 
 ```
 Header:
-00 00 01 2D      (group_id = 301)
-00 00 00 0B      (target_id = 11)
 54 58            (tl = "TX")
 00 00 00 01      (prop = 1)
+00 00 00 0B      (target_id = 11)
+00 00 01 2D      (group_id = 301)
 00 00 00 08      (data_length = 8)
 
 Data:

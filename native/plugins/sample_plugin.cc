@@ -13,6 +13,8 @@
 #include "BPG_Protocol/bpg_types.h"
 
 static MessageCallback g_send_message = nullptr;
+static BufferRequestCallback g_buffer_request_callback = nullptr;
+static BufferSendCallback g_buffer_send_callback = nullptr;
 static BPG::BpgDecoder g_bpg_decoder; // Decoder instance for this plugin
 
 // --- BPG Callbacks --- 
@@ -52,66 +54,54 @@ static void handle_decoded_packet(const BPG::AppPacket& packet) {
 // --- Example Sending Functions --- 
 
 // NEW: Function to send a simple Acknowledgement Group
-static bool send_acknowledgement_group(uint32_t group_id, uint32_t response_target_id) {
+static bool send_acknowledgement_group(uint32_t group_id, uint32_t target_id) {
     if (!g_send_message) {
         std::cerr << "[SamplePlugin BPG] Error: Cannot send ACK, g_send_message is null." << std::endl;
         return false;
     }
 
-    std::cout << "[SamplePlugin BPG] Sending ACK Group ID: " << group_id << ", Target ID: " << response_target_id << std::endl;
+    std::cout << "[SamplePlugin BPG] Encoding and Sending ACK Group ID: " << group_id << std::endl;
     BPG::BpgEncoder encoder;
-    BPG::AppPacketGroup group_to_send; // Will only contain one packet now
+    BPG::AppPacketGroup group_to_send;
 
-    {
-        // "IM" Image Packet
-        BPG::AppPacket image_packet;
-        image_packet.group_id = group_id;
-        image_packet.target_id = response_target_id; 
-        std::memcpy(image_packet.tl, "IM", 2); 
-        image_packet.is_end_of_group = false; // Set EG flag HERE
-        BPG::HybridData &image_hybrid_data= image_packet.content;
-        cv::Mat image = cv::Mat(10, 10, CV_8UC3, cv::Scalar(0, 0, 255));
-        image_hybrid_data.metadata_str=
-        "{\"width\":"+std::to_string(image.cols)+
-        ",\"height\":"+std::to_string(image.rows)+
-        ",\"channels\":"+std::to_string(image.channels())+
-        ",\"type\":"+std::to_string(image.type())+"}";
-        image_hybrid_data.binary_bytes.assign(image.data, image.data + image.total() * image.elemSize());
-        group_to_send.push_back(image_packet);
+    // --- Construct ACK Packet ---
+    BPG::AppPacket ack_packet;
+    ack_packet.group_id = group_id;
+    ack_packet.target_id = target_id; // Use the provided target_id
+    std::memcpy(ack_packet.tl, "AK", 2);
+    ack_packet.is_end_of_group = true; // ACK is a single-packet group
+    BPG::HybridData ack_hybrid_data;
+    std::string ack_str = "{\"received\":true}"; // Simple JSON acknowledgement
+    ack_hybrid_data.binary_bytes.assign(ack_str.begin(), ack_str.end());
+    ack_packet.content = std::move(ack_hybrid_data);
+    group_to_send.push_back(ack_packet); // Only one packet in this group
 
-        
+    // --- Calculate Size and Create Buffer/Writer ---
+    size_t total_estimated_size = 0;
+    for(const auto& packet : group_to_send) {
+        total_estimated_size += BPG::BPG_HEADER_SIZE + encoder.calculateAppDataSize(packet.content);
     }
-    
-    {
-        // 1. Acknowledgement Packet - This is the only and last packet
-        BPG::AppPacket ack_packet;
-        ack_packet.group_id = group_id;
-        ack_packet.target_id = response_target_id; 
-        std::memcpy(ack_packet.tl, "AK", 2); 
-        ack_packet.is_end_of_group = true; // Set EG flag HERE
-        BPG::HybridData ack_hybrid_data;
-        std::string ack_str = "{\"acknowledged\":true}";
-        ack_hybrid_data.metadata_str = ack_str;
-        // ack_hybrid_data.binary_bytes.assign(ack_str.begin(), ack_str.end());
-        ack_packet.content = std::move(ack_hybrid_data);
-        group_to_send.push_back(ack_packet);
+    std::vector<uint8_t> stream_buffer_vec(total_estimated_size);
+    BPG::BufferWriter stream_writer(stream_buffer_vec.data(), stream_buffer_vec.size());
 
-    }
-
-
-    {
-        BPG::BinaryData encoded_packet_buffer;
-        for(auto pkt:group_to_send)
-        {
-            encoded_packet_buffer.clear();
-            BPG::BpgError encode_err = encoder.encodePacket(pkt, encoded_packet_buffer);
-            if (encode_err == BPG::BpgError::Success) {
-                std::cout << "  Sending packet Type: " << std::string(pkt.tl, 2) << ", Size: " << encoded_packet_buffer.size() << std::endl;
-                g_send_message(encoded_packet_buffer.data(), encoded_packet_buffer.size());
-            }
+    // --- Encode the Group into the Writer ---
+    bool success = true;
+    for (const auto& packet : group_to_send) { // Loop is simple here as there's only one packet
+        BPG::BpgError encode_err = encoder.encodePacket(packet, stream_writer);
+        if (encode_err != BPG::BpgError::Success) {
+            std::cerr << "[SamplePlugin BPG] Error encoding ACK packet: " << static_cast<int>(encode_err) << std::endl;
+            success = false;
+            break; // Exit loop on error
         }
     }
 
+    // --- Send the Entire Buffer ---
+    if (success) {
+         std::cout << "  Sending ACK Group (ID: " << group_id << "), Total Size: " << stream_writer.size() << std::endl;
+         g_send_message(stream_writer.data(), stream_writer.size());
+    }
+
+    return success; // Return overall success/failure
 }
 
 // Example function to handle a completed packet group
@@ -161,29 +151,41 @@ static bool send_example_bpg_group(uint32_t group_id, uint32_t target_id) {
     BPG::AppPacket status_packet;
     status_packet.group_id = group_id;
     status_packet.target_id = target_id;
-    std::memcpy(status_packet.tl, "ST", 2); 
+    std::memcpy(status_packet.tl, "ST", 2);
     status_packet.is_end_of_group = true; // Set EG flag HERE
     BPG::HybridData status_hybrid_data;
     status_hybrid_data.metadata_str = "{\"status\":\"idle\"}"; // Use metadata_str
     status_packet.content = std::move(status_hybrid_data);
     group_to_send.push_back(status_packet);
 
-    // Encode packets individually and send them
+    // --- Calculate Size and Create Buffer/Writer ---
+    size_t total_estimated_size = 0;
+    for(const auto& packet : group_to_send) {
+        total_estimated_size += BPG::BPG_HEADER_SIZE + encoder.calculateAppDataSize(packet.content);
+    }
+    std::vector<uint8_t> stream_buffer_vec(total_estimated_size);
+    BPG::BufferWriter stream_writer(stream_buffer_vec.data(), stream_buffer_vec.size());
+
+
+    // --- Encode the Group into the Writer ---
     bool success = true;
     for (const auto& packet : group_to_send) {
-        BPG::BinaryData encoded_packet_buffer;
-        BPG::BpgError encode_err = encoder.encodePacket(packet, encoded_packet_buffer);
-        if (encode_err == BPG::BpgError::Success) {
-            std::cout << "  Sending packet Type: " << std::string(packet.tl, 2) << ", Size: " << encoded_packet_buffer.size() << std::endl;
-            g_send_message(encoded_packet_buffer.data(), encoded_packet_buffer.size());
-        } else {
-            std::cerr << "[SamplePlugin BPG] Error encoding packet (Type: "
+        BPG::BpgError encode_err = encoder.encodePacket(packet, stream_writer);
+        if (encode_err != BPG::BpgError::Success) {
+            std::cerr << "[SamplePlugin BPG] Error encoding example packet (Type: "
                       << std::string(packet.tl, 2) << "): " << static_cast<int>(encode_err) << std::endl;
             success = false;
-            break; 
+            break; // Exit loop on error
         }
     }
-    return success;
+
+    // --- Send the Entire Buffer ---
+     if (success) {
+         std::cout << "  Sending Example Group (ID: " << group_id << "), Total Size: " << stream_writer.size() << std::endl;
+         g_send_message(stream_writer.data(), stream_writer.size());
+    }
+
+    return success; // Return overall success/failure
 }
 
 
@@ -195,8 +197,13 @@ static PluginInfo plugin_info = {
     PLUGIN_API_VERSION
 };
 
-static PluginStatus initialize(MessageCallback callback) {
+static PluginStatus initialize(
+    MessageCallback callback,
+    BufferRequestCallback buffer_request_callback,
+    BufferSendCallback buffer_send_callback) {
     g_send_message = callback;
+    g_buffer_request_callback = buffer_request_callback;
+    g_buffer_send_callback = buffer_send_callback;
     g_bpg_decoder.reset(); // Reset decoder state on initialization
     std::cout << "Sample plugin (BPG Enabled) initialized" << std::endl;
     

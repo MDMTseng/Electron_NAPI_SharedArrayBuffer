@@ -26,13 +26,13 @@ struct PacketHeader {
 };
 
 // Simple structure for holding raw binary data
-using BinaryData = std::vector<uint8_t>;
+// using BinaryData = std::vector<uint8_t>;
 
 // HybridData structure will now be used for ALL packet content types.
 // Format on the wire: str_length(4) + metadata_str(str_length) + binary_bytes(...)
 struct HybridData {
     std::string metadata_str; // Describes the binary data. UTF-8 encoded string.
-    BinaryData binary_bytes;
+    std::vector<uint8_t> binary_bytes;
 };
 
 // Structure representing a packet at the application layer

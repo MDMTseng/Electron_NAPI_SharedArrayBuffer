@@ -3,91 +3,89 @@
 #include <arpa/inet.h> // For htonl, ntohl (assuming network byte order - adjust if needed)
 #include <iostream>
 #include <iomanip>
+#include <stdexcept> 
 
 namespace BPG {
 
-void BpgEncoder::serializeHeader(const PacketHeader& header, BinaryData& buffer) {
-    size_t initial_size = buffer.size();
-    buffer.resize(initial_size + BPG_HEADER_SIZE); // Use 18-byte constant
+// --- NEW BpgEncoder Helpers using BufferWriter ---
 
-    uint8_t* ptr = buffer.data() + initial_size;
+// Renamed internal helper
+bool BpgEncoder::serializeHeaderInternal(const PacketHeader& header, BufferWriter& writer) {
+    // Check remaining space before attempting appends
+    if (writer.remaining() < BPG_HEADER_SIZE) return false;
 
-    uint32_t group_id_n = htonl(header.group_id);
-    uint32_t target_id_n = htonl(header.target_id);
-    uint32_t prop_n = htonl(header.prop); // Convert prop to network order
-    uint32_t data_length_n = htonl(header.data_length);
+    // Write fields in the new protocol order using writer methods
+    bool success = true;
+    success &= writer.append_bytes_2(header.tl);            // TL (2 bytes)
+    success &= writer.append_uint32_network(header.prop);   // Prop (4 bytes)
+    success &= writer.append_uint32_network(header.target_id); // TargetID (4 bytes)
+    success &= writer.append_uint32_network(header.group_id);  // GroupID (4 bytes)
+    success &= writer.append_uint32_network(header.data_length); // DataLength (4 bytes)
 
-    std::memcpy(ptr, &group_id_n, sizeof(group_id_n)); ptr += sizeof(group_id_n);
-    std::memcpy(ptr, &target_id_n, sizeof(target_id_n)); ptr += sizeof(target_id_n);
-    std::memcpy(ptr, header.tl, sizeof(PacketType)); ptr += sizeof(PacketType);
-    std::memcpy(ptr, &prop_n, sizeof(prop_n)); ptr += sizeof(prop_n); // Copy the 4-byte prop field
-    std::memcpy(ptr, &data_length_n, sizeof(data_length_n));
+    return success; // Returns true if all appends succeeded
 }
 
-// Simplified: Calculates size for HybridData only
+// Renamed internal helper
+bool BpgEncoder::serializeAppDataInternal(const HybridData& data, BufferWriter& writer) {
+    uint32_t str_len = static_cast<uint32_t>(data.metadata_str.length());
+    size_t binary_len = data.binary_bytes.size();
+    size_t required = sizeof(uint32_t) + str_len + binary_len;
+
+    // Check remaining space first
+    if (writer.remaining() < required) return false;
+
+    bool success = true;
+    // String Length
+    success &= writer.append_uint32_network(str_len);
+    // String Bytes
+    if (str_len > 0) {
+        success &= writer.append_string(data.metadata_str);
+    }
+    // Binary Bytes
+    if (binary_len > 0) {
+        success &= writer.append_vector(data.binary_bytes);
+    }
+
+    return success;
+}
+
+// calculateAppDataSize remains the same
 size_t BpgEncoder::calculateAppDataSize(const HybridData& data) {
-    // Size = 4 (str_len) + metadata_str_len + binary_data_len
     return sizeof(uint32_t) + data.metadata_str.length() + data.binary_bytes.size();
 }
 
-// Simplified: Serializes HybridData only
-BpgError BpgEncoder::serializeAppData(const HybridData& data, BinaryData& buffer) {
-    // 1. Serialize metadata string length (4 bytes, network byte order)
-    uint32_t str_len = static_cast<uint32_t>(data.metadata_str.length());
-    uint32_t str_len_n = htonl(str_len);
-    buffer.insert(buffer.end(), reinterpret_cast<const uint8_t*>(&str_len_n), reinterpret_cast<const uint8_t*>(&str_len_n) + sizeof(str_len_n));
+// *** IMPLEMENTATION OF OVERLOAD using BufferWriter ***
+BpgError BpgEncoder::encodePacket(const AppPacket& packet, BufferWriter& writer)
+{
+    // 1. Calculate required size
+    size_t app_data_size = calculateAppDataSize(packet.content);
+    size_t total_required_size = BPG_HEADER_SIZE + app_data_size;
 
-    // 2. Serialize metadata string bytes (if any)
-    if (str_len > 0) {
-        buffer.insert(buffer.end(), reinterpret_cast<const uint8_t*>(data.metadata_str.data()), reinterpret_cast<const uint8_t*>(data.metadata_str.data() + str_len));
+    // 2. Check initial writer capacity
+    if (writer.remaining() < total_required_size) {
+        return BpgError::BufferTooSmall;
     }
 
-    // 3. Append binary bytes (if any)
-    if (!data.binary_bytes.empty()) {
-        buffer.insert(buffer.end(), data.binary_bytes.begin(), data.binary_bytes.end());
-    }
-    
-    return BpgError::Success; 
-}
-
-BpgError BpgEncoder::encodePacket(const AppPacket& packet, BinaryData& out_buffer) {
-    size_t data_size = calculateAppDataSize(packet.content);
-
+    // 3. Construct Header object (logical representation)
     PacketHeader header;
     header.group_id = packet.group_id;
     header.target_id = packet.target_id;
     std::memcpy(header.tl, packet.tl, sizeof(PacketType));
-    header.data_length = static_cast<uint32_t>(data_size);
-
-    // Set the prop field (uint32_t) - zero out first, then set EG bit if needed
-    header.prop = 0; // Zero out all bits
+    header.prop = 0;
     if (packet.is_end_of_group) {
-        header.prop |= BPG_PROP_EG_BIT_MASK; // Set the LSB
+        header.prop |= BPG_PROP_EG_BIT_MASK;
+    }
+    header.data_length = static_cast<uint32_t>(app_data_size);
+
+    // 4. Serialize using helpers that take the writer
+    if (!serializeHeaderInternal(header, writer)) {
+        return BpgError::EncodingError;
+    }
+    if (!serializeAppDataInternal(packet.content, writer)) {
+        return BpgError::EncodingError;
     }
 
-    serializeHeader(header, out_buffer);
-    BpgError data_err = serializeAppData(packet.content, out_buffer);
-    if (data_err != BpgError::Success) {
-        return data_err;
-    }
-    return BpgError::Success;
-}
-
-BpgError BpgEncoder::encodePacketGroup(const AppPacketGroup& group, BinaryData& out_buffer) {
-    out_buffer.clear(); 
-    size_t total_size = 0;
-    for (const auto& packet : group) {
-        total_size += BPG_HEADER_SIZE + calculateAppDataSize(packet.content); // Uses 18-byte constant
-    }
-    out_buffer.reserve(total_size);
-
-    for (const auto& packet : group) {
-        BpgError err = encodePacket(packet, out_buffer);
-        if (err != BpgError::Success) {
-            out_buffer.clear();
-            return err;
-        }
-    }
+    // 5. Success. The writer object now tracks the written size internally.
     return BpgError::Success;
 }
 
