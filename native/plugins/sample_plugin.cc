@@ -57,6 +57,33 @@ static void handle_decoded_packet(const BPG::AppPacket& packet) {
     }
 }
 
+
+BPG::AppPacket create_image_packet(uint32_t group_id, uint32_t target_id, cv::Mat img, std::string img_format){
+    BPG::AppPacket img_packet;
+    img_packet.group_id = group_id;
+    img_packet.target_id = target_id; // Use the provided target_id
+    std::memcpy(img_packet.tl, "IM", 2);
+    img_packet.is_end_of_group = false;
+
+    BPG::HybridData &img_hybrid_data = img_packet.content;
+    img_hybrid_data.metadata_str = 
+        "{\"w\":"+std::to_string(img.cols)+
+        ",\"h\":"+std::to_string(img.rows)+
+        ",\"c\":"+std::to_string(img.channels())+
+        ",\"t\":"+std::to_string(img.type())+
+        ",\"f\":\""+img_format+"\"}";
+
+    if(img_format=="raw"){
+        img_hybrid_data.external_binary_bytes.init(img.data,img.total()*img.elemSize(),img.total()*img.elemSize());
+        img_hybrid_data.external_binary_bytes.add_hold_resource(std::make_shared<image_resource>(img));
+    }else{
+        std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 90};
+        cv::imencode(img_format, img, img_hybrid_data.internal_binary_bytes, params);
+    }
+    return img_packet;
+}
+
+
 // --- Example Sending Functions --- 
 
 // NEW: Function to send a simple Acknowledgement Group
@@ -70,24 +97,12 @@ static bool send_acknowledgement_group(uint32_t group_id, uint32_t target_id) {
     BPG::AppPacketGroup group_to_send;
 
     {
-        // --- Construct ACK Packet ---
-        BPG::AppPacket img_packet;
-        img_packet.group_id = group_id;
-        img_packet.target_id = target_id; // Use the provided target_id
-        std::memcpy(img_packet.tl, "IM", 2);
-        img_packet.is_end_of_group = false;
-
-
-        {
-
-            cv::Mat img = cv::Mat(800,600,CV_8UC3,cv::Scalar(0,0,255));
-            img_packet.content.external_binary_bytes.init(img.data,img.total()*img.elemSize(),img.total()*img.elemSize());
-            img_packet.content.external_binary_bytes.add_hold_resource(std::make_shared<image_resource>(img));
-        }
-
-        
-        group_to_send.push_back(img_packet); // Only one packet in this group
-
+        // --- Construct IM Packet ---
+        BPG::AppPacket img_packet = 
+        create_image_packet(group_id, target_id, 
+        cv::Mat(800,600,CV_8UC3,cv::Scalar(0,0,255)), 
+        "raw");
+        group_to_send.push_back(img_packet);
     }
 
 
@@ -117,8 +132,15 @@ static bool send_acknowledgement_group(uint32_t group_id, uint32_t target_id) {
     for(const auto& packet : group_to_send) {
         total_estimated_size += BPG::BPG_HEADER_SIZE + packet.content.calculateEncodedSize();
     }
-    std::vector<uint8_t> stream_buffer_vec(total_estimated_size);
-    BPG::BufferWriter stream_writer(stream_buffer_vec.data(), stream_buffer_vec.size());
+
+    // --- Request Buffer ---
+    uint8_t* buffer = nullptr;
+    uint32_t buffer_size = 0;
+    g_buffer_request_callback(1000,&buffer, &buffer_size);
+
+    BPG::BufferWriter stream_writer(buffer, buffer_size);
+
+
 
     // --- Encode the Group into the Writer ---
     bool success = true;
@@ -134,7 +156,12 @@ static bool send_acknowledgement_group(uint32_t group_id, uint32_t target_id) {
     // --- Send the Entire Buffer ---
     if (success) {
          std::cout << "  Sending ACK Group (ID: " << group_id << "), Total Size: " << stream_writer.size() << std::endl;
-         g_send_message(stream_writer.data(), stream_writer.size());
+        //  g_send_message(stream_writer.data(), stream_writer.size());
+        g_buffer_send_callback(stream_writer.size());
+    }
+    else
+    {
+        g_buffer_send_callback(0);
     }
 
     return success; // Return overall success/failure
