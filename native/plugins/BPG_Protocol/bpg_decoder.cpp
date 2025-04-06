@@ -103,14 +103,14 @@ static BpgError parseDataFromBuffer(const PacketHeader& header, const uint8_t* d
     }
 
     // 3. Read remaining binary bytes
-    out_data.binary_bytes.clear();
+    out_data.internal_binary_bytes.clear();
     size_t binary_bytes_len = header.data_length - STR_LENGTH_SIZE - str_len;
      if (binary_bytes_len > 0) {
         if (current_ptr + binary_bytes_len > data_end) {
             std::cerr << "[BPG Decode ERR] Incomplete Binary data for TL: " << std::string(header.tl, 2) << std::endl;
              return BpgError::IncompletePacket;
         }
-        out_data.binary_bytes.assign(current_ptr, current_ptr + binary_bytes_len);
+        out_data.internal_binary_bytes.assign(current_ptr, current_ptr + binary_bytes_len);
     }
 
     return BpgError::Success;

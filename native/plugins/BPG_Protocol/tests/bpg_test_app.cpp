@@ -34,11 +34,11 @@ void printAppPacket(const BPG::AppPacket& packet) {
 
     std::cout << "    Content: [HybridData] Meta: " <<
         (packet.content.metadata_str.empty() ? "<empty>" : packet.content.metadata_str)
-              << ", Binary Size: " << std::hex << packet.content.binary_bytes.size() << std::dec << " bytes" << std::endl;
+              << ", Binary Size: " << std::hex << packet.content.internal_binary_bytes.size() << std::dec << " bytes" << std::endl;
 
     // Optionally show binary content if it's likely text
-    if (packet.content.metadata_str.empty() && !packet.content.binary_bytes.empty() && packet.content.binary_bytes.size() < 100) { // Heuristic
-        std::string potential_text(packet.content.binary_bytes.begin(), packet.content.binary_bytes.end());
+    if (packet.content.metadata_str.empty() && !packet.content.internal_binary_bytes.empty() && packet.content.internal_binary_bytes.size() < 100) { // Heuristic
+        std::string potential_text(packet.content.internal_binary_bytes.begin(), packet.content.internal_binary_bytes.end());
         bool is_printable = true;
         for(char c : potential_text) {
             if (!std::isprint(static_cast<unsigned char>(c)) && !std::isspace(static_cast<unsigned char>(c))) {
@@ -51,13 +51,13 @@ void printAppPacket(const BPG::AppPacket& packet) {
         }
     }
 
-    if (!packet.content.binary_bytes.empty()) {
+    if (!packet.content.internal_binary_bytes.empty()) {
         std::cout << "    Binary Hex: ";
-        size_t print_len = std::min(packet.content.binary_bytes.size(), (size_t)64);
+        size_t print_len = std::min(packet.content.internal_binary_bytes.size(), (size_t)64);
         for (size_t i = 0; i < print_len; ++i) {
-            std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(packet.content.binary_bytes[i]) << " ";
+            std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(packet.content.internal_binary_bytes[i]) << " ";
         }
-        if (packet.content.binary_bytes.size() > 64) {
+        if (packet.content.internal_binary_bytes.size() > 64) {
             std::cout << "...";
         }
         std::cout << std::dec << std::endl; 
@@ -88,7 +88,7 @@ int testCase_InterleavedGroups() {
         cv::Mat original_image(5, 5, CV_8UC3, cv::Scalar(0, 100, 255));
         cv::putText(original_image, "Hi", cv::Point(1,4), cv::FONT_HERSHEY_PLAIN, 0.5, cv::Scalar(255,255,255), 1);
         std::string image_format = ".jpg"; std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 90};
-        cv::imencode(image_format, original_image, img_hybrid_data.binary_bytes, params);
+        cv::imencode(image_format, original_image, img_hybrid_data.internal_binary_bytes, params);
         img_hybrid_data.metadata_str = "{\"w\":5,\"h\":5,\"f\":\"jpg\"}";
         img_packet.content = std::move(img_hybrid_data);
         group101_def.push_back(img_packet); printAppPacket(img_packet);
@@ -97,7 +97,7 @@ int testCase_InterleavedGroups() {
         report_packet.group_id = group_id_101; report_packet.target_id = target_id_101; std::memcpy(report_packet.tl, "RP", 2); report_packet.is_end_of_group = false;
         BPG::HybridData report_hybrid_data;
         std::string report_str = "{\"p\":0.75}";
-        report_hybrid_data.binary_bytes.assign(report_str.begin(), report_str.end());
+        report_hybrid_data.internal_binary_bytes.assign(report_str.begin(), report_str.end());
         report_packet.content = std::move(report_hybrid_data);
         group101_def.push_back(report_packet); printAppPacket(report_packet);
 
@@ -105,7 +105,7 @@ int testCase_InterleavedGroups() {
         ack_packet.group_id = group_id_101; ack_packet.target_id = target_id_101; std::memcpy(ack_packet.tl, "AK", 2); ack_packet.is_end_of_group = true; // Last packet
         BPG::HybridData ack_hybrid_data;
         std::string ack_str = "{\"ok\":1}";
-        ack_hybrid_data.binary_bytes.assign(ack_str.begin(), ack_str.end());
+        ack_hybrid_data.internal_binary_bytes.assign(ack_str.begin(), ack_str.end());
         ack_packet.content = std::move(ack_hybrid_data);
         group101_def.push_back(ack_packet); printAppPacket(ack_packet);
     }
@@ -117,7 +117,7 @@ int testCase_InterleavedGroups() {
         text_packet.group_id = group_id_102; text_packet.target_id = target_id_102; std::memcpy(text_packet.tl, "TX", 2); text_packet.is_end_of_group = false;
         BPG::HybridData text_hybrid_data;
         std::string text_str = "Hello 102";
-        text_hybrid_data.binary_bytes.assign(text_str.begin(), text_str.end());
+        text_hybrid_data.internal_binary_bytes.assign(text_str.begin(), text_str.end());
         text_packet.content = std::move(text_hybrid_data);
         group102_def.push_back(text_packet); printAppPacket(text_packet);
 
@@ -125,7 +125,7 @@ int testCase_InterleavedGroups() {
         done_packet.group_id = group_id_102; done_packet.target_id = target_id_102; std::memcpy(done_packet.tl, "DN", 2); done_packet.is_end_of_group = true; // Last packet
         BPG::HybridData done_hybrid_data;
         std::string done_str = "{\"d\":1}";
-        done_hybrid_data.binary_bytes.assign(done_str.begin(), done_str.end());
+        done_hybrid_data.internal_binary_bytes.assign(done_str.begin(), done_str.end());
         done_packet.content = std::move(done_hybrid_data);
         group102_def.push_back(done_packet); printAppPacket(done_packet);
     }
@@ -196,7 +196,7 @@ int testCase_SinglePacketGroup() {
     single_packet.group_id = group_id; single_packet.target_id = target_id; std::memcpy(single_packet.tl, "ST", 2); single_packet.is_end_of_group = true;
     BPG::HybridData status_hybrid_data;
     std::string status_str = "{\"status\":\"ready\"}";
-    status_hybrid_data.binary_bytes.assign(status_str.begin(), status_str.end());
+    status_hybrid_data.internal_binary_bytes.assign(status_str.begin(), status_str.end());
     single_packet.content = std::move(status_hybrid_data);
     printAppPacket(single_packet);
 

@@ -68,15 +68,15 @@ struct PacketHeader {
 // Format on the wire: str_length(4) + metadata_str(str_length) + binary_bytes(...)
 struct HybridData {
     std::string metadata_str; // Describes the binary data. UTF-8 encoded string.
-    std::vector<uint8_t> binary_bytes;//if empty, use binary_bytes2
-    BufferWriter binary_bytes2;
+    std::vector<uint8_t> internal_binary_bytes;//if empty, use binary_bytes2
+    BufferWriter external_binary_bytes;
 
     // Calculates the size needed to encode this HybridData instance.
     size_t calculateEncodedSize() const {
-        if(binary_bytes.empty()){
-            return sizeof(uint32_t) + metadata_str.length() + binary_bytes2.size();
+        if(!internal_binary_bytes.empty()){
+            return sizeof(uint32_t) + metadata_str.length() + internal_binary_bytes.size();
         }else{
-            return sizeof(uint32_t) + metadata_str.length() + binary_bytes.size();
+            return sizeof(uint32_t) + metadata_str.length() + external_binary_bytes.size();
         }
     }
 
@@ -99,10 +99,10 @@ struct HybridData {
         }
 
         // Write binary bytes (if any)
-        if (!binary_bytes.empty()) {
-            writer.write(binary_bytes.data(), binary_bytes.size());
+        if (!internal_binary_bytes.empty()) {
+            writer.write(internal_binary_bytes.data(), internal_binary_bytes.size());
         }else{
-            writer.write(binary_bytes2.data(), binary_bytes2.size());
+            writer.write(external_binary_bytes.data(), external_binary_bytes.size());
         }
 
         return BpgError::Success;

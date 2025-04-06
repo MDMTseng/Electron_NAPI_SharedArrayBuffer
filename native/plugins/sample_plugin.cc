@@ -33,16 +33,16 @@ static void handle_decoded_packet(const BPG::AppPacket& packet) {
               << ", Type: " << std::string(packet.tl, 2) << std::endl;
 
     std::cout << "    Meta: " << (packet.content.metadata_str.empty() ? "<empty>" : packet.content.metadata_str) << std::endl;
-    std::cout << "    Binary Size: " << packet.content.binary_bytes.size() << std::endl;
+    std::cout << "    Binary Size: " << packet.content.internal_binary_bytes.size() << std::endl;
 
     // Print binary content hex preview (up to 64 bytes)
-    if (!packet.content.binary_bytes.empty()) {
+    if (!packet.content.internal_binary_bytes.empty()) {
         std::cout << "    Binary Hex: ";
-        size_t print_len = std::min(packet.content.binary_bytes.size(), (size_t)64);
+        size_t print_len = std::min(packet.content.internal_binary_bytes.size(), (size_t)64);
         for (size_t i = 0; i < print_len; ++i) {
-            std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(packet.content.binary_bytes[i]) << " ";
+            std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(packet.content.internal_binary_bytes[i]) << " ";
         }
-        if (packet.content.binary_bytes.size() > 64) {
+        if (packet.content.internal_binary_bytes.size() > 64) {
             std::cout << "...";
         }
         std::cout << std::dec << std::endl; // Reset stream to decimal
@@ -52,7 +52,7 @@ static void handle_decoded_packet(const BPG::AppPacket& packet) {
     if (strncmp(packet.tl, "IM", 2) == 0) {
         std::cout << "    (Packet is an Image)" << std::endl;
         // Potentially decode using metadata hints
-        // cv::Mat img = cv::imdecode(packet.content.binary_bytes, cv::IMREAD_COLOR);
+        // cv::Mat img = cv::imdecode(packet.content.internal_binary_bytes, cv::IMREAD_COLOR);
         // if (!img.empty()) { /* process image */ }
     }
 }
@@ -81,8 +81,8 @@ static bool send_acknowledgement_group(uint32_t group_id, uint32_t target_id) {
         {
 
             cv::Mat img = cv::Mat(800,600,CV_8UC3,cv::Scalar(0,0,255));
-            img_packet.content.binary_bytes2.init(img.data,img.total()*img.elemSize(),img.total()*img.elemSize());
-            img_packet.content.binary_bytes2.add_hold_resource(std::make_shared<image_resource>(img));
+            img_packet.content.external_binary_bytes.init(img.data,img.total()*img.elemSize(),img.total()*img.elemSize());
+            img_packet.content.external_binary_bytes.add_hold_resource(std::make_shared<image_resource>(img));
         }
 
         
@@ -108,7 +108,7 @@ static bool send_acknowledgement_group(uint32_t group_id, uint32_t target_id) {
     
     BPG::HybridData ack_hybrid_data;
     std::string ack_str = "{\"received\":true}"; // Simple JSON acknowledgement
-    ack_hybrid_data.binary_bytes.assign(ack_str.begin(), ack_str.end());
+    ack_hybrid_data.internal_binary_bytes.assign(ack_str.begin(), ack_str.end());
     ack_packet.content = std::move(ack_hybrid_data);
     group_to_send.push_back(ack_packet); // Only one packet in this group
 
@@ -149,7 +149,7 @@ static void handle_decoded_group(uint32_t group_id, BPG::AppPacketGroup&& group)
     for(const auto& packet : group) {
          std::cout << "    - Packet Type in Group: " << std::string(packet.tl, 2) << std::endl;
          std::cout << "      Meta: " << (packet.content.metadata_str.empty() ? "<empty>" : packet.content.metadata_str) << std::endl;
-         std::cout << "      Binary Size: " << packet.content.binary_bytes.size() << std::endl;
+         std::cout << "      Binary Size: " << packet.content.internal_binary_bytes.size() << std::endl;
     }
 
     // --- Echo Back Logic --- 
@@ -180,7 +180,7 @@ static bool send_example_bpg_group(uint32_t group_id, uint32_t target_id) {
     text_packet.is_end_of_group = false; // Not the last packet
     BPG::HybridData text_hybrid_data;
     std::string text_str = "Response from Sample Plugin";
-    text_hybrid_data.binary_bytes.assign(text_str.begin(), text_str.end());
+    text_hybrid_data.internal_binary_bytes.assign(text_str.begin(), text_str.end());
     text_packet.content = std::move(text_hybrid_data);
     group_to_send.push_back(text_packet);
 
