@@ -17,6 +17,12 @@ static BufferRequestCallback g_buffer_request_callback = nullptr;
 static BufferSendCallback g_buffer_send_callback = nullptr;
 static BPG::BpgDecoder g_bpg_decoder; // Decoder instance for this plugin
 
+
+
+class image_resource:public BPG::BufferWriter::hold_resource{
+    public:
+    cv::Mat img;
+};
 // --- BPG Callbacks --- 
 
 // Example function to handle a fully decoded application packet
@@ -68,6 +74,43 @@ static bool send_acknowledgement_group(uint32_t group_id, uint32_t target_id) {
 
     std::cout << "[SamplePlugin BPG] Encoding and Sending ACK Group ID: " << group_id << std::endl;
     BPG::AppPacketGroup group_to_send;
+
+    {
+        // --- Construct ACK Packet ---
+        BPG::AppPacket img_packet;
+        img_packet.group_id = group_id;
+        img_packet.target_id = target_id; // Use the provided target_id
+        std::memcpy(img_packet.tl, "IM", 2);
+        img_packet.is_end_of_group = false;
+
+
+        auto img_hybrid_data_ptr = std::make_shared<BPG::HybridData>();
+
+
+        {
+
+            cv::Mat img = cv::Mat(800,600,CV_8UC3,cv::Scalar(0,0,255));
+            img_packet.content = img_hybrid_data_ptr;
+            img_hybrid_data_ptr->binary_bytes2.init(img.data,img.total()*img.elemSize(),img.total()*img.elemSize());
+            auto img_resource = std::make_shared<image_resource>();
+            img_resource->img = img;
+            img_hybrid_data_ptr->binary_bytes2.add_hold_resource(img_resource);
+        }
+
+        
+        img_packet.content = img_hybrid_data_ptr;
+        group_to_send.push_back(img_packet); // Only one packet in this group
+
+    }
+
+
+
+
+
+
+
+
+
 
     // --- Construct ACK Packet ---
     BPG::AppPacket ack_packet;

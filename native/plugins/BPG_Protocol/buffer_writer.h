@@ -12,19 +12,41 @@ namespace BPG {
 // --- BufferWriter Utility Class ---
 // Wraps a raw buffer to provide safer, vector-like append operations.
 class BufferWriter {
+
+public:
+
+    class hold_resource{
+        public:
+    };
+
+
 private:
     uint8_t* start_ptr_;
     size_t capacity_;
     size_t current_offset_;
-
+    std::vector<std::shared_ptr<hold_resource>> hold_resources_;
 public:
-    BufferWriter(uint8_t* buffer, size_t capacity)
-        : start_ptr_(buffer), capacity_(capacity), current_offset_(0) {
+
+    BufferWriter():start_ptr_(nullptr), capacity_(0), current_offset_(0){}
+    BufferWriter(uint8_t* buffer, size_t capacity,size_t init_size=0)
+        : start_ptr_(buffer), capacity_(capacity), current_offset_(init_size) {
         if (!buffer && capacity > 0) {
             // Handle error: Null buffer with non-zero capacity
             // Maybe throw or set an internal error state? For now, let capacity be 0.
             capacity_ = 0;
         }
+    }
+
+    void init(uint8_t* buffer, size_t capacity,size_t init_size=0)
+    {
+        start_ptr_ = buffer;
+        capacity_ = capacity;
+        current_offset_ = init_size;
+    }
+
+    void add_hold_resource(std::shared_ptr<hold_resource> resource)
+    {
+        hold_resources_.push_back(resource);
     }
 
     // Appends raw bytes if capacity allows
@@ -112,6 +134,13 @@ public:
         std::memcpy(start_ptr_ + current_offset_, data, length);
         current_offset_ += length;
         return true;
+    }
+    bool write(BufferWriter& writer){
+        if(!canWrite(writer.size())){
+            return false;
+        }
+        std::memcpy(start_ptr_ + current_offset_, writer.data(), writer.size());
+        current_offset_ += writer.size();
     }
 };
 // --- End BufferWriter ---

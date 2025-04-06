@@ -67,8 +67,10 @@ struct PacketHeader {
 // HybridData structure will now be used for ALL packet content types.
 // Format on the wire: str_length(4) + metadata_str(str_length) + binary_bytes(...)
 struct HybridData {
+    HybridData(){}
     std::string metadata_str; // Describes the binary data. UTF-8 encoded string.
-    std::vector<uint8_t> binary_bytes;
+    std::vector<uint8_t> binary_bytes;//if empty, use binary_bytes2
+    BufferWriter binary_bytes2;
 
     // Virtual destructor for polymorphism
     virtual ~HybridData() = default;
@@ -76,7 +78,11 @@ struct HybridData {
     // Calculates the size needed to encode this HybridData instance.
     // Made virtual in case derived classes have different calculations
     virtual size_t calculateEncodedSize() const {
-        return sizeof(uint32_t) + metadata_str.length() + binary_bytes.size();
+        if(binary_bytes.empty()){
+            return sizeof(uint32_t) + metadata_str.length() + binary_bytes2.size();
+        }else{
+            return sizeof(uint32_t) + metadata_str.length() + binary_bytes.size();
+        }
     }
 
     // Encodes the HybridData into the provided BufferWriter.
@@ -84,7 +90,7 @@ struct HybridData {
     virtual BpgError encode(BufferWriter& writer) const {
         uint32_t json_len = static_cast<uint32_t>(metadata_str.length());
         uint32_t json_len_n = htonl(json_len);
-        size_t required_size = sizeof(json_len_n) + json_len + binary_bytes.size();
+        size_t required_size = calculateEncodedSize();
 
         if (!writer.canWrite(required_size)) {
             return BpgError::BufferTooSmall;
@@ -101,6 +107,8 @@ struct HybridData {
         // Write binary bytes (if any)
         if (!binary_bytes.empty()) {
             writer.write(binary_bytes.data(), binary_bytes.size());
+        }else{
+            writer.write(binary_bytes2.data(), binary_bytes2.size());
         }
 
         return BpgError::Success;
