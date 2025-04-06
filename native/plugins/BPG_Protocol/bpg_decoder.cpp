@@ -24,8 +24,8 @@ void BpgDecoder::reset() {
 
 // --- Helper: Parse Header from contiguous buffer --- Updated for 18 bytes, new order
 static bool parseHeaderFromBuffer(const uint8_t* buffer_start, size_t buffer_len, PacketHeader& out_header) {
-    if (!buffer_start || buffer_len < BPG_HEADER_SIZE) { // Check against 18-byte size
-        std::cerr << "[BPG Decode ERR] parseHeaderFromBuffer called with invalid args: buffer_start=" 
+    if (!buffer_start || buffer_len < BPG_HEADER_SIZE) {
+        std::cerr << "[BPG Decode ERR] parseHeaderFromBuffer called with invalid args: buffer_start="
                   << (void*)buffer_start << ", buffer_len=" << buffer_len << " (expected >= " << BPG_HEADER_SIZE << ")" << std::endl;
         return false;
     }
@@ -34,20 +34,20 @@ static bool parseHeaderFromBuffer(const uint8_t* buffer_start, size_t buffer_len
     // Network order temporary variables
     uint32_t prop_n, target_id_n, group_id_n, data_length_n;
 
-    // Read fields in the new protocol order
+    // Read fields according to the DOCUMENTED order
     std::memcpy(out_header.tl, ptr, sizeof(PacketType)); ptr += sizeof(PacketType);     // TL (2 bytes)
-    std::memcpy(&prop_n, ptr, sizeof(prop_n)); ptr += sizeof(prop_n);             // Prop (4 bytes)
+    std::memcpy(&prop_n, ptr, sizeof(prop_n)); ptr += sizeof(prop_n);               // Prop (4 bytes)
     std::memcpy(&target_id_n, ptr, sizeof(target_id_n)); ptr += sizeof(target_id_n); // TargetID (4 bytes)
-    std::memcpy(&group_id_n, ptr, sizeof(group_id_n)); ptr += sizeof(group_id_n);   // GroupID (4 bytes)
-    std::memcpy(&data_length_n, ptr, sizeof(data_length_n));                       // DataLength (4 bytes)
+    std::memcpy(&group_id_n, ptr, sizeof(group_id_n)); ptr += sizeof(group_id_n);     // GroupID (4 bytes)
+    std::memcpy(&data_length_n, ptr, sizeof(data_length_n)); ptr += sizeof(data_length_n); // DataLength (4 bytes)
 
     // Convert from network order to host order and store in struct members
-    out_header.prop = ntohl(prop_n); 
+    // TL is already raw bytes
+    out_header.prop = ntohl(prop_n);
     out_header.target_id = ntohl(target_id_n);
     out_header.group_id = ntohl(group_id_n);
     out_header.data_length = ntohl(data_length_n);
-    // out_header.tl is already bytes, no conversion needed
-    
+
     return true;
 }
 

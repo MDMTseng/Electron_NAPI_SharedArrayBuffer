@@ -61,7 +61,6 @@ static bool send_acknowledgement_group(uint32_t group_id, uint32_t target_id) {
     }
 
     std::cout << "[SamplePlugin BPG] Encoding and Sending ACK Group ID: " << group_id << std::endl;
-    BPG::BpgEncoder encoder;
     BPG::AppPacketGroup group_to_send;
 
     // --- Construct ACK Packet ---
@@ -79,7 +78,7 @@ static bool send_acknowledgement_group(uint32_t group_id, uint32_t target_id) {
     // --- Calculate Size and Create Buffer/Writer ---
     size_t total_estimated_size = 0;
     for(const auto& packet : group_to_send) {
-        total_estimated_size += BPG::BPG_HEADER_SIZE + encoder.calculateAppDataSize(packet.content);
+        total_estimated_size += BPG::BPG_HEADER_SIZE + packet.content.calculateEncodedSize();
     }
     std::vector<uint8_t> stream_buffer_vec(total_estimated_size);
     BPG::BufferWriter stream_writer(stream_buffer_vec.data(), stream_buffer_vec.size());
@@ -87,7 +86,7 @@ static bool send_acknowledgement_group(uint32_t group_id, uint32_t target_id) {
     // --- Encode the Group into the Writer ---
     bool success = true;
     for (const auto& packet : group_to_send) { // Loop is simple here as there's only one packet
-        BPG::BpgError encode_err = encoder.encodePacket(packet, stream_writer);
+        BPG::BpgError encode_err = packet.encode(stream_writer);
         if (encode_err != BPG::BpgError::Success) {
             std::cerr << "[SamplePlugin BPG] Error encoding ACK packet: " << static_cast<int>(encode_err) << std::endl;
             success = false;
@@ -132,7 +131,6 @@ static bool send_example_bpg_group(uint32_t group_id, uint32_t target_id) {
     }
 
     std::cout << "[SamplePlugin BPG] Encoding and Sending Example Group ID: " << group_id << std::endl;
-    BPG::BpgEncoder encoder;
     BPG::AppPacketGroup group_to_send;
 
     // 1. Example Text Packet
@@ -161,7 +159,7 @@ static bool send_example_bpg_group(uint32_t group_id, uint32_t target_id) {
     // --- Calculate Size and Create Buffer/Writer ---
     size_t total_estimated_size = 0;
     for(const auto& packet : group_to_send) {
-        total_estimated_size += BPG::BPG_HEADER_SIZE + encoder.calculateAppDataSize(packet.content);
+        total_estimated_size += BPG::BPG_HEADER_SIZE + packet.content.calculateEncodedSize();
     }
     std::vector<uint8_t> stream_buffer_vec(total_estimated_size);
     BPG::BufferWriter stream_writer(stream_buffer_vec.data(), stream_buffer_vec.size());
@@ -170,7 +168,7 @@ static bool send_example_bpg_group(uint32_t group_id, uint32_t target_id) {
     // --- Encode the Group into the Writer ---
     bool success = true;
     for (const auto& packet : group_to_send) {
-        BPG::BpgError encode_err = encoder.encodePacket(packet, stream_writer);
+        BPG::BpgError encode_err = packet.encode(stream_writer);
         if (encode_err != BPG::BpgError::Success) {
             std::cerr << "[SamplePlugin BPG] Error encoding example packet (Type: "
                       << std::string(packet.tl, 2) << "): " << static_cast<int>(encode_err) << std::endl;

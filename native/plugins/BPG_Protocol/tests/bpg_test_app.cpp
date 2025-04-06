@@ -68,7 +68,6 @@ void printAppPacket(const BPG::AppPacket& packet) {
 int testCase_InterleavedGroups() {
     std::cout << "\n--- Test Case: Interleaved Groups --- \n" << std::endl;
     received_groups.clear();
-    BPG::BpgEncoder encoder;
     BPG::BpgDecoder decoder;
 
     // ... (Group/Target IDs remain the same) ...
@@ -128,7 +127,7 @@ int testCase_InterleavedGroups() {
 
     // Calculate total size needed and pre-allocate buffer
     size_t total_estimated_size = 0;
-    auto calculate_packet_size = [&](const BPG::AppPacket& p){ return BPG::BPG_HEADER_SIZE + encoder.calculateAppDataSize(p.content); };
+    auto calculate_packet_size = [&](const BPG::AppPacket& p){ return BPG::BPG_HEADER_SIZE + p.content.calculateEncodedSize(); };
     for(const auto& p : group101_def) total_estimated_size += calculate_packet_size(p);
     for(const auto& p : group102_def) total_estimated_size += calculate_packet_size(p);
 
@@ -138,12 +137,12 @@ int testCase_InterleavedGroups() {
     std::cout << "\n--- Sender Encoding Interleaved Packets into Buffer --- " << std::endl;
     BPG::BpgError encode_err = BPG::BpgError::Success;
 
-    // Encode interleaved directly into the writer
-    encode_err = encoder.encodePacket(group101_def[0], stream_writer); assert(encode_err == BPG::BpgError::Success);
-    encode_err = encoder.encodePacket(group102_def[0], stream_writer); assert(encode_err == BPG::BpgError::Success);
-    encode_err = encoder.encodePacket(group101_def[1], stream_writer); assert(encode_err == BPG::BpgError::Success);
-    encode_err = encoder.encodePacket(group102_def[1], stream_writer); assert(encode_err == BPG::BpgError::Success);
-    encode_err = encoder.encodePacket(group101_def[2], stream_writer); assert(encode_err == BPG::BpgError::Success);
+    // Encode interleaved directly into the writer using packet.encode()
+    encode_err = group101_def[0].encode(stream_writer); assert(encode_err == BPG::BpgError::Success);
+    encode_err = group102_def[0].encode(stream_writer); assert(encode_err == BPG::BpgError::Success);
+    encode_err = group101_def[1].encode(stream_writer); assert(encode_err == BPG::BpgError::Success);
+    encode_err = group102_def[1].encode(stream_writer); assert(encode_err == BPG::BpgError::Success);
+    encode_err = group101_def[2].encode(stream_writer); assert(encode_err == BPG::BpgError::Success);
 
     size_t actual_written_size = stream_writer.size();
     std::cout << "Total bytes written to buffer: " << actual_written_size << " (Estimated: " << total_estimated_size << ")" << std::endl;
@@ -159,18 +158,18 @@ int testCase_InterleavedGroups() {
     assert(received_groups.count(group_id_101));
     // ... (rest of assertions for group 101 remain the same) ...
      const auto& received_group_101 = received_groups[group_id_101];
-     assert(received_group_101.size() == 3); 
+     assert(received_group_101.size() == 3);
      assert(strncmp(received_group_101[0].tl, "IM", 2) == 0 && !received_group_101[0].is_end_of_group);
      assert(strncmp(received_group_101[1].tl, "RP", 2) == 0 && !received_group_101[1].is_end_of_group);
-     assert(strncmp(received_group_101[2].tl, "AK", 2) == 0 && received_group_101[2].is_end_of_group); 
+     assert(strncmp(received_group_101[2].tl, "AK", 2) == 0 && received_group_101[2].is_end_of_group);
      std::cout << "Verifying Group 101... PASSED." << std::endl;
 
     assert(received_groups.count(group_id_102));
     // ... (rest of assertions for group 102 remain the same) ...
      const auto& received_group_102 = received_groups[group_id_102];
-     assert(received_group_102.size() == 2); 
+     assert(received_group_102.size() == 2);
      assert(strncmp(received_group_102[0].tl, "TX", 2) == 0 && !received_group_102[0].is_end_of_group);
-     assert(strncmp(received_group_102[1].tl, "DN", 2) == 0 && received_group_102[1].is_end_of_group); 
+     assert(strncmp(received_group_102[1].tl, "DN", 2) == 0 && received_group_102[1].is_end_of_group);
      std::cout << "Verifying Group 102... PASSED." << std::endl;
 
     std::cout << "\nOverall Verification PASSED." << std::endl;
@@ -181,7 +180,6 @@ int testCase_InterleavedGroups() {
 int testCase_SinglePacketGroup() {
     std::cout << "\n--- Test Case: Single Packet Group --- " << std::endl;
     received_groups.clear();
-    BPG::BpgEncoder encoder;
     BPG::BpgDecoder decoder;
 
     uint32_t group_id = 201;
@@ -197,12 +195,12 @@ int testCase_SinglePacketGroup() {
     printAppPacket(single_packet);
 
     // Allocate buffer and writer
-    size_t required_size = BPG::BPG_HEADER_SIZE + encoder.calculateAppDataSize(single_packet.content);
+    size_t required_size = BPG::BPG_HEADER_SIZE + single_packet.content.calculateEncodedSize();
     std::vector<uint8_t> buffer_vec(required_size);
     BPG::BufferWriter writer(buffer_vec.data(), buffer_vec.size());
 
-    // Encode into writer
-    BPG::BpgError encode_err = encoder.encodePacket(single_packet, writer);
+    // Encode into writer using packet.encode()
+    BPG::BpgError encode_err = single_packet.encode(writer);
     assert(encode_err == BPG::BpgError::Success);
     size_t bytes_written = writer.size();
     std::cout << "Encoded single packet size: " << bytes_written << " bytes" << std::endl;
@@ -216,7 +214,7 @@ int testCase_SinglePacketGroup() {
     const auto& received_group = received_groups[group_id];
     assert(received_group.size() == 1);
     assert(strncmp(received_group[0].tl, "ST", 2) == 0);
-    assert(received_group[0].is_end_of_group == true); 
+    assert(received_group[0].is_end_of_group == true);
     std::cout << "Single Packet Group PASSED." << std::endl;
     return 0;
 }
