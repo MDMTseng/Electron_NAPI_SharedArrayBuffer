@@ -182,7 +182,8 @@ bool BpgDecoder::tryParsePacket(std::deque<uint8_t>& buffer,
         app_packet.target_id = header.target_id;
         std::memcpy(app_packet.tl, header.tl, sizeof(PacketType));
         app_packet.is_end_of_group = is_end; // Set flag from header.prop LSB
-        app_packet.content = std::move(hybrid_data); 
+        
+        app_packet.content = std::make_shared<HybridData>(std::move(hybrid_data)); 
 
         if (!active_groups_.count(app_packet.group_id)) {
             active_groups_[app_packet.group_id] = {}; 

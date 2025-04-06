@@ -24,17 +24,23 @@ static void handle_decoded_packet(const BPG::AppPacket& packet) {
     std::cout << "[SamplePlugin BPG] Decoded Packet - Group: " << packet.group_id
               << ", Target: " << packet.target_id
               << ", Type: " << std::string(packet.tl, 2) << std::endl;
-    std::cout << "    Meta: " << (packet.content.metadata_str.empty() ? "<empty>" : packet.content.metadata_str) << std::endl;
-    std::cout << "    Binary Size: " << packet.content.binary_bytes.size() << std::endl;
+
+    if (!packet.content) {
+        std::cout << "    Content: <null>" << std::endl;
+        return; 
+    }
+
+    std::cout << "    Meta: " << (packet.content->metadata_str.empty() ? "<empty>" : packet.content->metadata_str) << std::endl;
+    std::cout << "    Binary Size: " << packet.content->binary_bytes.size() << std::endl;
 
     // Print binary content hex preview (up to 64 bytes)
-    if (!packet.content.binary_bytes.empty()) {
+    if (!packet.content->binary_bytes.empty()) {
         std::cout << "    Binary Hex: ";
-        size_t print_len = std::min(packet.content.binary_bytes.size(), (size_t)64);
+        size_t print_len = std::min(packet.content->binary_bytes.size(), (size_t)64);
         for (size_t i = 0; i < print_len; ++i) {
-            std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(packet.content.binary_bytes[i]) << " ";
+            std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(packet.content->binary_bytes[i]) << " ";
         }
-        if (packet.content.binary_bytes.size() > 64) {
+        if (packet.content->binary_bytes.size() > 64) {
             std::cout << "...";
         }
         std::cout << std::dec << std::endl; // Reset stream to decimal
@@ -46,7 +52,7 @@ static void handle_decoded_packet(const BPG::AppPacket& packet) {
     if (strncmp(packet.tl, "IM", 2) == 0) {
         std::cout << "    (Packet is an Image)" << std::endl;
         // Potentially decode using metadata hints
-        // cv::Mat img = cv::imdecode(packet.content.binary_bytes, cv::IMREAD_COLOR);
+        // cv::Mat img = cv::imdecode(packet.content->binary_bytes, cv::IMREAD_COLOR);
         // if (!img.empty()) { /* process image */ }
     }
 }
@@ -69,23 +75,28 @@ static bool send_acknowledgement_group(uint32_t group_id, uint32_t target_id) {
     ack_packet.target_id = target_id; // Use the provided target_id
     std::memcpy(ack_packet.tl, "AK", 2);
     ack_packet.is_end_of_group = true; // ACK is a single-packet group
-    BPG::HybridData ack_hybrid_data;
+    
+    auto ack_hybrid_data_ptr = std::make_shared<BPG::HybridData>();
     std::string ack_str = "{\"received\":true}"; // Simple JSON acknowledgement
-    ack_hybrid_data.binary_bytes.assign(ack_str.begin(), ack_str.end());
-    ack_packet.content = std::move(ack_hybrid_data);
+    ack_hybrid_data_ptr->binary_bytes.assign(ack_str.begin(), ack_str.end());
+    ack_packet.content = ack_hybrid_data_ptr;
     group_to_send.push_back(ack_packet); // Only one packet in this group
 
     // --- Calculate Size and Create Buffer/Writer ---
     size_t total_estimated_size = 0;
     for(const auto& packet : group_to_send) {
-        total_estimated_size += BPG::BPG_HEADER_SIZE + packet.content.calculateEncodedSize();
+        if (packet.content) { 
+            total_estimated_size += BPG::BPG_HEADER_SIZE + packet.content->calculateEncodedSize();
+        } else {
+            total_estimated_size += BPG::BPG_HEADER_SIZE; // Only header if no content
+        }
     }
     std::vector<uint8_t> stream_buffer_vec(total_estimated_size);
     BPG::BufferWriter stream_writer(stream_buffer_vec.data(), stream_buffer_vec.size());
 
     // --- Encode the Group into the Writer ---
     bool success = true;
-    for (const auto& packet : group_to_send) { // Loop is simple here as there's only one packet
+    for (const auto& packet : group_to_send) { 
         BPG::BpgError encode_err = packet.encode(stream_writer);
         if (encode_err != BPG::BpgError::Success) {
             std::cerr << "[SamplePlugin BPG] Error encoding ACK packet: " << static_cast<int>(encode_err) << std::endl;
@@ -111,6 +122,12 @@ static void handle_decoded_group(uint32_t group_id, BPG::AppPacketGroup&& group)
     // --- TODO: Add application logic for the complete group --- 
     for(const auto& packet : group) {
          std::cout << "    - Packet Type in Group: " << std::string(packet.tl, 2) << std::endl;
+         if (packet.content) {
+             std::cout << "      Meta: " << (packet.content->metadata_str.empty() ? "<empty>" : packet.content->metadata_str) << std::endl;
+             std::cout << "      Binary Size: " << packet.content->binary_bytes.size() << std::endl;
+         } else {
+             std::cout << "      Content: <null>" << std::endl;
+         }
     }
 
     // --- Echo Back Logic --- 
@@ -139,10 +156,10 @@ static bool send_example_bpg_group(uint32_t group_id, uint32_t target_id) {
     text_packet.target_id = target_id;
     std::memcpy(text_packet.tl, "TX", 2);
     text_packet.is_end_of_group = false; // Not the last packet
-    BPG::HybridData text_hybrid_data;
+    auto text_hybrid_data_ptr = std::make_shared<BPG::HybridData>();
     std::string text_str = "Response from Sample Plugin";
-    text_hybrid_data.binary_bytes.assign(text_str.begin(), text_str.end());
-    text_packet.content = std::move(text_hybrid_data);
+    text_hybrid_data_ptr->binary_bytes.assign(text_str.begin(), text_str.end());
+    text_packet.content = text_hybrid_data_ptr;
     group_to_send.push_back(text_packet);
 
     // 2. Example Status Packet - This is now the last packet
@@ -151,15 +168,19 @@ static bool send_example_bpg_group(uint32_t group_id, uint32_t target_id) {
     status_packet.target_id = target_id;
     std::memcpy(status_packet.tl, "ST", 2);
     status_packet.is_end_of_group = true; // Set EG flag HERE
-    BPG::HybridData status_hybrid_data;
-    status_hybrid_data.metadata_str = "{\"status\":\"idle\"}"; // Use metadata_str
-    status_packet.content = std::move(status_hybrid_data);
+    auto status_hybrid_data_ptr = std::make_shared<BPG::HybridData>();
+    status_hybrid_data_ptr->metadata_str = "{\"status\":\"idle\"}"; // Use metadata_str
+    status_packet.content = status_hybrid_data_ptr;
     group_to_send.push_back(status_packet);
 
     // --- Calculate Size and Create Buffer/Writer ---
     size_t total_estimated_size = 0;
     for(const auto& packet : group_to_send) {
-        total_estimated_size += BPG::BPG_HEADER_SIZE + packet.content.calculateEncodedSize();
+        if (packet.content) { 
+            total_estimated_size += BPG::BPG_HEADER_SIZE + packet.content->calculateEncodedSize();
+        } else {
+             total_estimated_size += BPG::BPG_HEADER_SIZE;
+        }
     }
     std::vector<uint8_t> stream_buffer_vec(total_estimated_size);
     BPG::BufferWriter stream_writer(stream_buffer_vec.data(), stream_buffer_vec.size());
