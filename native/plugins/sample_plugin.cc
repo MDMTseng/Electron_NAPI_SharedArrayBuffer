@@ -155,6 +155,8 @@ BPG::AppPacket create_image_packet(uint32_t group_id, uint32_t target_id, const 
         ",\"type\":"+std::to_string(img.type())+
         ",\"format\":\""+img_format+"\"}";
     
+
+    printf("metadata_str: %s\n",img_hybrid_data_ptr->metadata_str.c_str());
     // Assign the shared_ptr to content
     img_packet.content = img_hybrid_data_ptr;
     return img_packet;
@@ -179,6 +181,8 @@ BPG::AppPacket create_string_packet(uint32_t group_id, uint32_t target_id,std::s
 
 // --- Example Sending Functions --- 
 
+
+int drawCounter=0;
 // NEW: Function to send a simple Acknowledgement Group
 static bool send_acknowledgement_group(uint32_t group_id, uint32_t target_id) {
     if (!g_send_message) {
@@ -191,9 +195,13 @@ static bool send_acknowledgement_group(uint32_t group_id, uint32_t target_id) {
 
     {
         // --- Construct IM Packet ---
+
+        cv::Mat img(600,800,CV_8UC4,cv::Scalar(0,0,255,100));
+        // draw text on the image
+        cv::putText(img, "Hello, World!"+std::to_string(drawCounter++), cv::Point(10,50), cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0,0,0,255), 2);
         group_to_send.push_back(
             create_image_packet(group_id, target_id, 
-        cv::Mat(800,600,CV_8UC4,cv::Scalar(0,0,255,100)), 
+        img, 
         "raw_rgba")
         );
     }

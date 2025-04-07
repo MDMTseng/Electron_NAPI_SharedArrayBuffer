@@ -13,6 +13,8 @@ function App() {
     const [queueStatus, setQueueStatus] = useState('Queue: 0 messages');
     const [pluginStatus, setPluginStatus] = useState<string>('No plugin loaded');
     const [isSending, setIsSending] = useState<boolean>(false); // To disable button during request
+    const [receivedImageData, setReceivedImageData] = useState<ImageData | null>(null); // State for the image data
+    const canvasRef = useRef<HTMLCanvasElement>(null); // Ref for the canvas element
 
     const [speedTest_sendCount, setSpeedTest_sendCount] = useState<number>(1);
     const [speedTestStatus, setSpeedTestStatus] = useState<string>('Not started');
@@ -189,6 +191,7 @@ function App() {
      const logResponsePackets = (originalGroupId: number, responsePackets: AppPacket[]) => {
          setMessages(prev => [...prev, `[BPG Resp Complete] GID:${originalGroupId}, Count:${responsePackets.length}`]);
          responsePackets.forEach(packet => {
+             let isImagePacket = false; // Flag to check if we handled this as an image
              let contentPreview = `Resp TL:${packet.tl}, EG:${packet.is_end_of_group ? 'Y' : 'N'}, TID:${packet.target_id}`;
              if (packet.content.metadata_str) contentPreview += `, Meta: ${packet.content.metadata_str.substring(0, 30)}...`;
              if (packet.content.binary_bytes.length > 0) {
@@ -197,12 +200,57 @@ function App() {
                  contentPreview += ` (Hex: ${hexPreview}${packet.content.binary_bytes.length > 16 ? '...' : ''})`;
                   if (!packet.content.metadata_str && packet.content.binary_bytes.length < 100) {
                      try { const text = new TextDecoder().decode(packet.content.binary_bytes); if (/^[ -~\s]*$/.test(text)) contentPreview += ` (as text: "${text}")` } catch (e: any) { }
+                  }
+             }
+
+             // --- Handle "IM" packets ---
+             if (packet.tl === 'IM' && packet.content.metadata_str && packet.content.binary_bytes.length > 0) {
+                 try {
+                     const metadata = JSON.parse(packet.content.metadata_str);
+                     if (metadata.format === 'raw_rgba' && metadata.width > 0 && metadata.height > 0) {
+                         const width = metadata.width;
+                         const height = metadata.height;
+                         // Ensure binary data length matches expected RGBA size
+                         if (packet.content.binary_bytes.length === width * height * 4) {
+                             const clampedArray = new Uint8ClampedArray(packet.content.binary_bytes);
+                             const imgData = new ImageData(clampedArray, width, height);
+                             setReceivedImageData(imgData); // Update state
+                             contentPreview += ` (Processed as ${width}x${height} RGBA Image)`;
+                             isImagePacket = true;
+                         } else {
+                              contentPreview += ` (IM format=raw_rgba, but size mismatch: ${packet.content.binary_bytes.length} vs expected ${width * height * 4})`;
+                         }
+                     } else {
+                          contentPreview += ` (IM packet, but unsupported format "${metadata.format}" or invalid dimensions)`;
+                     }
+                 } catch (e:any) {
+                     console.error("Error processing IM packet:", e);
+                     contentPreview += ` (Error parsing IM metadata: ${e.message})`;
                  }
              }
+             // --- End Handle "IM" packets ---
+
              setMessages(prev => [...prev, ` < ${contentPreview}`]);
          });
          setMessages(prev => [...prev, `--- Request Complete ---`]);
      };
+
+    // Effect to draw the image onto the canvas when it changes
+    useEffect(() => {
+        if (receivedImageData && canvasRef.current) {
+            const canvas = canvasRef.current;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+                // Resize canvas to fit image
+                canvas.width = receivedImageData.width;
+                canvas.height = receivedImageData.height;
+                // Draw the image data
+                ctx.putImageData(receivedImageData, 0, 0);
+                console.log(`Drew ${receivedImageData.width}x${receivedImageData.height} image to canvas.`);
+                setMessages(prev => [...prev, `[Display] Rendered ${receivedImageData.width}x${receivedImageData.height} image on canvas.`]);
+            }
+        }
+    }, [receivedImageData]); // Dependency array ensures this runs when receivedImageData changes
 
     // --- Plugin Loading/Unloading (no change) ---
      const loadPlugin = () => {
@@ -285,6 +333,12 @@ function App() {
                         {message}
                     </div>
                 ))}
+            </div>
+
+            {/* Canvas Area */}
+            <div className="canvas-container">
+                <h3>Received Image</h3>
+                <canvas ref={canvasRef} style={{ border: '1px solid #ccc', maxWidth: '100%' }}></canvas>
             </div>
         </div>
     );
