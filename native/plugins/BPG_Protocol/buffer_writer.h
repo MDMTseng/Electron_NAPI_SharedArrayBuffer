@@ -13,18 +13,11 @@ namespace BPG {
 // Wraps a raw buffer to provide safer, vector-like append operations.
 class BufferWriter {
 
-public:
-
-    class hold_resource{
-        public:
-    };
-
 
 private:
     uint8_t* start_ptr_;
     size_t capacity_;
     size_t current_offset_;
-    std::vector<std::shared_ptr<hold_resource>> hold_resources_;
 public:
 
     BufferWriter():start_ptr_(nullptr), capacity_(0), current_offset_(0){}
@@ -44,10 +37,6 @@ public:
         current_offset_ = init_size;
     }
 
-    void add_hold_resource(std::shared_ptr<hold_resource> resource)
-    {
-        hold_resources_.push_back(resource);
-    }
 
     // Appends raw bytes if capacity allows
     bool append(const void* data, size_t length) {
@@ -81,10 +70,18 @@ public:
     }
 
     // Appends data from a std::vector<uint8_t>
-     bool append_vector(const std::vector<uint8_t>& vec) {
-        return append(vec.data(), vec.size());
-     }
+    bool append_vector(const std::vector<uint8_t>& vec) {
+    return append(vec.data(), vec.size());
+    }
 
+    uint8_t* claim_space(size_t size){
+        if(!canWrite(size)){
+            return nullptr;
+        }
+        uint8_t* ptr = start_ptr_ + current_offset_;
+        current_offset_ += size;
+        return ptr;
+    }
     // Returns the number of bytes currently written
     size_t size() const {
         return current_offset_;

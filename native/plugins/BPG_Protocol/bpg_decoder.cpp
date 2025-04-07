@@ -181,19 +181,19 @@ bool BpgDecoder::tryParsePacket(std::deque<uint8_t>& buffer,
         app_packet.group_id = header.group_id;
         app_packet.target_id = header.target_id;
         std::memcpy(app_packet.tl, header.tl, sizeof(PacketType));
-        app_packet.is_end_of_group = is_end; // Set flag from header.prop LSB
-        
-        app_packet.content = std::move(hybrid_data); 
+        app_packet.is_end_of_group = is_end;
+
+        app_packet.content = std::make_shared<HybridData>(std::move(hybrid_data));
 
         if (!active_groups_.count(app_packet.group_id)) {
-            active_groups_[app_packet.group_id] = {}; 
+            active_groups_[app_packet.group_id] = {};
         }
-        active_groups_[app_packet.group_id].push_back(std::move(app_packet)); 
+        active_groups_[app_packet.group_id].push_back(std::move(app_packet));
 
-        const auto& stored_packet = active_groups_[header.group_id].back(); 
+        const auto& stored_packet = active_groups_[header.group_id].back();
 
         if (packet_callback) {
-            try { packet_callback(stored_packet); } catch(const std::exception& e) { 
+            try { packet_callback(stored_packet); } catch(const std::exception& e) {
                  std::cerr << "[BPG ERR] Exception in packet_callback: " << e.what() << std::endl;
              } catch(...) { std::cerr << "[BPG ERR] Unknown exception in packet_callback" << std::endl; }
         }
