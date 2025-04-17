@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "build:plugin": "cmake -S native/plugins -B native/plugins/build && cmake --build native/plugins/build",
+    "build:plugin": "chmod +x native/plugins/build.sh && ./native/plugins/build.sh",
     "clean:plugin": "rimraf native/plugins/build",
     "electron:dev": "npm run build:plugin && node-gyp rebuild && concurrently \"vite\" \"electron .\"",
     "electron:build": "npm run build:plugin && vite build && electron-builder",
