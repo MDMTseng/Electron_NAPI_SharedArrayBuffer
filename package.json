@@ -3,11 +3,12 @@
   "version": "1.0.0",
   "description": "Simple Electron app with N-API addon World",
   "main": "electron/main.js",
+  "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "build:plugin": "chmod +x native/plugins/build.sh && ./native/plugins/build.sh",
+    "build:plugin": "chmod +x native/plugins/build.sh && cd ./native/plugins/ && ./build.sh",
     "clean:plugin": "rimraf native/plugins/build",
     "electron:dev": "npm run build:plugin && node-gyp rebuild && concurrently \"vite\" \"electron .\"",
     "electron:build": "npm run build:plugin && vite build && electron-builder",

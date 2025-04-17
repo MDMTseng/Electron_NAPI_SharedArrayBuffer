@@ -7,17 +7,51 @@
 #include <opencv2/opencv.hpp>
 #include <iomanip>
 #include <memory>
+#include <pybind11/embed.h>
+#include <pybind11/pybind11.h>
 
 // Include BPG Protocol headers
 #include "BPG_Protocol/bpg_decoder.h"
 #include "BPG_Protocol/bpg_encoder.h"
 #include "BPG_Protocol/bpg_types.h"
 
+// Declare Python plugin functions
+extern "C" {
+    bool python_initialize();
+    const char* python_call_function(const char* function_name, const char** args, int arg_count);
+    void python_shutdown();
+    void free_result(const char* result);
+}
+
+namespace py = pybind11;
+
+BPG::AppPacket create_string_packet(uint32_t group_id, uint32_t target_id,std::string TL, std::string str);
+
 static MessageCallback g_send_message = nullptr;
 static BufferRequestCallback g_buffer_request_callback = nullptr;
 static BufferSendCallback g_buffer_send_callback = nullptr;
 static BPG::BpgDecoder g_bpg_decoder; // Decoder instance for this plugin
+static std::unique_ptr<py::scoped_interpreter> g_python_interpreter = nullptr;
 
+// Function to initialize Python interpreter
+static bool initialize_python() {
+    try {
+        if (!g_python_interpreter) {
+            g_python_interpreter = std::make_unique<py::scoped_interpreter>();
+            
+            // Add the python_script directory to Python path
+            py::module_ sys = py::module_::import("sys");
+            py::str script_dir = py::str("python_script");
+            sys.attr("path").attr("append")(script_dir);
+            
+            std::cout << "Python interpreter initialized successfully" << std::endl;
+        }
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to initialize Python interpreter: " << e.what() << std::endl;
+        return false;
+    }
+}
 
 class HybridData_cvMat:public BPG::HybridData{
     public:
@@ -125,6 +159,57 @@ static void handle_decoded_packet(const BPG::AppPacket& packet) {
             std::cout << "...";
         }
         std::cout << std::dec << std::endl; // Reset stream to decimal
+    }
+
+    // Call Python function for text packets
+    if (false && strncmp(packet.tl, "TX", 2) == 0 && packet.content) {
+        std::vector<std::string> args;
+        if (!packet.content->internal_binary_bytes.empty()) {
+            // Convert binary data to string
+            std::string text_data(packet.content->internal_binary_bytes.begin(), 
+                                packet.content->internal_binary_bytes.end());
+            args.push_back(text_data);
+        }
+        
+        // Prepare arguments for Python call
+        const char** c_args = new const char*[args.size()];
+        for (size_t i = 0; i < args.size(); ++i) {
+            c_args[i] = args[i].c_str();
+        }
+        
+        // Call Python process_data function through the Python plugin
+        const char* python_result = python_call_function("process_data", c_args, args.size());
+        std::cout << "Python processing result: " << python_result << std::endl;
+        
+        // Send the result back through BPG
+        BPG::AppPacketGroup response_group;
+        response_group.push_back(create_string_packet(packet.group_id, packet.target_id, "TX", python_result));
+        response_group.back().is_end_of_group = true;
+        
+        // Send the response
+        uint8_t* buffer = nullptr;
+        uint32_t buffer_size = 0;
+        g_buffer_request_callback(1000, &buffer, &buffer_size);
+        
+        BPG::BufferWriter stream_writer(buffer, buffer_size);
+        bool success = true;
+        for (const auto& resp_packet : response_group) {
+            BPG::BpgError encode_err = resp_packet.encode(stream_writer);
+            if (encode_err != BPG::BpgError::Success) {
+                success = false;
+                break;
+            }
+        }
+        
+        if (success) {
+            g_buffer_send_callback(stream_writer.size());
+        } else {
+            g_buffer_send_callback(0);
+        }
+        
+        // Clean up
+        delete[] c_args;
+        free_result(python_result);
     }
 
     // --- TODO: Add application logic based on packet type/content ---
@@ -306,26 +391,49 @@ static PluginInfo plugin_info = {
     PLUGIN_API_VERSION
 };
 
-static PluginStatus initialize(
-    MessageCallback callback,
-    BufferRequestCallback buffer_request_callback,
-    BufferSendCallback buffer_send_callback) {
-    g_send_message = callback;
+static PluginStatus initialize(MessageCallback send_message, 
+                             BufferRequestCallback buffer_request_callback,
+                             BufferSendCallback buffer_send_callback) {
+    g_send_message = send_message;
     g_buffer_request_callback = buffer_request_callback;
     g_buffer_send_callback = buffer_send_callback;
     g_bpg_decoder.reset(); // Reset decoder state on initialization
-    std::cout << "Sample plugin (BPG Enabled) initialized" << std::endl;
     
-    // Example: Send an initial status message when plugin loads
-    // send_example_bpg_group(901, 1); // Example group ID and target ID
+    printf("Initializing Python....\n");
+    
+    try {
+        // Initialize Python interpreter
+        if (!g_python_interpreter) {
+            g_python_interpreter = std::make_unique<py::scoped_interpreter>();
+            
+            // Add the python_script directory to Python path
+            py::module_ sys = py::module_::import("sys");
+            py::str script_dir = py::str("native/plugins/python_script");
+            sys.attr("path").attr("append")(script_dir);
+            
+            std::cout << "Python interpreter initialized successfully" << std::endl;
+            std::cout << "Python path: " << py::str(sys.attr("path")).cast<std::string>() << std::endl;
+        }
 
-    return PLUGIN_SUCCESS;
+        // Import the test module
+        py::module_ test_module = py::module_::import("test_plugin");
+        
+        // Call a simple test function
+        py::object result = test_module.attr("test_function")(py::make_tuple("Hello", "from", "C++"));
+        std::string result_str = py::str(result).cast<std::string>();
+        std::cout << "Python test function result: " << result_str << std::endl;
+        
+        return PLUGIN_SUCCESS;
+    } catch (const std::exception& e) {
+        std::cerr << "Python error: " << e.what() << std::endl;
+        return PLUGIN_ERROR_INITIALIZATION;
+    }
 }
 
 static void shutdown() {
-    std::cout << "Sample plugin (BPG Enabled) shutdown" << std::endl;
+    std::cout << "Sample plugin (BPG Enabled with Python) shutdown" << std::endl;
+    python_shutdown(); // Shutdown Python through the Python plugin
     g_send_message = nullptr;
-    // No explicit decoder shutdown needed unless it holds resources
 }
 
 // Process incoming raw data from the host using the BPG decoder

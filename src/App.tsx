@@ -39,10 +39,11 @@ function App() {
 
     // --- Plugin Loading (remains in App) ---
      useEffect(() => {
-         // Initialize channel is handled by the hook now
-         loadPlugin(); // Load plugin on mount
-
+        // Initialize channel is handled by the hook now
+        loadPlugin(); // Load plugin on mount
+        console.log("Plugin loaded");
          return () => {
+            unloadPlugin(); // Unload plugin on unmount
              // Channel cleanup is handled by the hook now
          };
      }, []); // Empty dependency array ensures this runs only once on mount

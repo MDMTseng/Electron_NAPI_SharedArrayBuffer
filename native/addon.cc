@@ -164,7 +164,7 @@ public:
     int req_available_buffer(uint32_t wait_ms,uint8_t**ret_buffer,uint32_t *ret_buffer_sapce) {
         send_buffer_mutex.lock();
         int isLineBusy=1;
-        for (int i = 0; i < wait_ms; i++) {
+        for (uint32_t i = 0; i < wait_ms; i++) {
             isLineBusy=control[2].load(std::memory_order_seq_cst);
             if(isLineBusy==0)break;
             std::this_thread::sleep_for(std::chrono::milliseconds(1));

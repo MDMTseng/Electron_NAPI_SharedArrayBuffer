@@ -1,5 +1,8 @@
-const { app, BrowserWindow } = require('electron');
-const path = require('path');
+import { app, BrowserWindow, ipcMain } from 'electron';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = process.env.NODE_ENV === 'development';
 
 function createWindow() {
@@ -11,7 +14,7 @@ function createWindow() {
       // contextIsolation: true,
       // preload: path.join(__dirname, 'preload.js'),
       contextIsolation: false,
-      
+      devTools: true
     }
   });
 
@@ -21,9 +24,17 @@ function createWindow() {
 //     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
 //   }
   mainWindow.loadURL('http://localhost:5173');
-  mainWindow.webContents.openDevTools();
-
-
+  
+  // Only open DevTools in development mode
+  if (isDev) {
+    mainWindow.webContents.openDevTools();
+    // Suppress Autofill error
+    mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
+      if (message.includes('Autofill.enable')) {
+        event.preventDefault();
+      }
+    });
+  }
 
   ipcMain.handle('get_native_api', async (event, filePath) => {
     return require('./build/Release/addon.node');
