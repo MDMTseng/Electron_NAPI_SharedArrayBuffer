@@ -21,14 +21,14 @@ add_library(sample_plugin SHARED
     sample_plugin.cc
 )
 
-# Link dependencies
+# Link dependencies for sample plugin
 target_link_libraries(sample_plugin PRIVATE 
     ${OpenCV_LIBS}
     bpg_protocol
 )
 target_include_directories(sample_plugin PRIVATE 
-    ${CMAKE_SOURCE_DIR}/..
-    ${CMAKE_CURRENT_SOURCE_DIR}/BPG_Protocol
+    ${CMAKE_SOURCE_DIR}/.. # For plugin_interface.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/BPG_Protocol # For BPG headers
     ${OpenCV_INCLUDE_DIRS}
 )
 

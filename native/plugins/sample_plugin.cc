@@ -13,11 +13,12 @@
 #include "BPG_Protocol/bpg_encoder.h"
 #include "BPG_Protocol/bpg_types.h"
 
+BPG::AppPacket create_string_packet(uint32_t group_id, uint32_t target_id,std::string TL, std::string str);
+
 static MessageCallback g_send_message = nullptr;
 static BufferRequestCallback g_buffer_request_callback = nullptr;
 static BufferSendCallback g_buffer_send_callback = nullptr;
 static BPG::BpgDecoder g_bpg_decoder; // Decoder instance for this plugin
-
 
 class HybridData_cvMat:public BPG::HybridData{
     public:
@@ -302,30 +303,30 @@ static void handle_decoded_group(uint32_t group_id, BPG::AppPacketGroup&& group)
 
 static PluginInfo plugin_info = {
     "Sample Plugin (BPG Enabled)", // Updated name
-    "1.1.0", // Version bump
+    "1.2.0", // Version bump
     PLUGIN_API_VERSION
 };
 
-static PluginStatus initialize(
-    MessageCallback callback,
-    BufferRequestCallback buffer_request_callback,
-    BufferSendCallback buffer_send_callback) {
-    g_send_message = callback;
+static PluginStatus initialize(MessageCallback send_message, 
+                             BufferRequestCallback buffer_request_callback,
+                             BufferSendCallback buffer_send_callback) {
+    g_send_message = send_message;
     g_buffer_request_callback = buffer_request_callback;
     g_buffer_send_callback = buffer_send_callback;
     g_bpg_decoder.reset(); // Reset decoder state on initialization
-    std::cout << "Sample plugin (BPG Enabled) initialized" << std::endl;
     
-    // Example: Send an initial status message when plugin loads
-    // send_example_bpg_group(901, 1); // Example group ID and target ID
-
+    printf("Sample Plugin Initialized (No Python).\n");
+    
     return PLUGIN_SUCCESS;
 }
 
 static void shutdown() {
-    std::cout << "Sample plugin (BPG Enabled) shutdown" << std::endl;
+    std::cout << "Sample plugin shutdown (No Python)" << std::endl;
+    
+    // Reset callbacks
     g_send_message = nullptr;
-    // No explicit decoder shutdown needed unless it holds resources
+    g_buffer_request_callback = nullptr;
+    g_buffer_send_callback = nullptr;
 }
 
 // Process incoming raw data from the host using the BPG decoder
@@ -345,11 +346,6 @@ static void process_message(const uint8_t* data, size_t length) {
         // Decide how to handle decoder errors (e.g., reset decoder?)
         // g_bpg_decoder.reset(); 
     }
-
-    // // Original echo behavior (now handled by BPG callbacks if needed)
-    // if (g_send_message) {
-    //     g_send_message(data, length);
-    // }
 }
 
 static void update() {

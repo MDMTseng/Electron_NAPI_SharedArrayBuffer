@@ -2,3 +2,4 @@ node_modules/
 build/
 .DS_Store
 .vscode/
+native/plugins/python_script/__pycache__/
