@@ -13,6 +13,9 @@
 #include "BPG_Protocol/bpg_encoder.h"
 #include "BPG_Protocol/bpg_types.h"
 
+// Include our Python IPC header
+#include "python_ipc.h"
+
 BPG::AppPacket create_string_packet(uint32_t group_id, uint32_t target_id,std::string TL, std::string str);
 
 static MessageCallback g_send_message = nullptr;
@@ -60,7 +63,6 @@ class HybridData_cvMat:public BPG::HybridData{
             switch(img.type()){
                 case CV_8UC1:
                 {
-
                     uint8_t* img_data = img.data;
                     uint8_t* buffer_ptr = buffer;
                     for(int i=0;i<img.total();i++){
@@ -74,7 +76,6 @@ class HybridData_cvMat:public BPG::HybridData{
                     break;
                 case CV_8UC3:
                 {
-
                     uint8_t* img_data = img.data;
                     uint8_t* buffer_ptr = buffer;
                     for(int i=0;i<img.total();i++){
@@ -85,13 +86,11 @@ class HybridData_cvMat:public BPG::HybridData{
                     }
                 }
                     break;
-
                 case CV_8UC4:
                 {
                     memcpy(buffer,img.data,img.total()*4);
                 }
                     break;
-                    
             }
             return BPG::BpgError::Success;
         }
@@ -100,6 +99,61 @@ class HybridData_cvMat:public BPG::HybridData{
 };
 
 // --- BPG Callbacks --- 
+
+// Callback for data received FROM Python via the listener thread
+static void handle_python_data(const uint8_t* data, size_t length) {
+    std::cout << "[SamplePlugin PythonCallback] Received " << length << " bytes from Python listener." << std::endl;
+    
+    // TODO: Need context (like original group_id, target_id) to send a proper response.
+    // For now, just create a generic BPG packet with the received data.
+    // A more robust solution would involve associating requests with responses, 
+    // perhaps using a map or storing context when send_data_to_python_async is called.
+    uint32_t response_group_id = 999; // Placeholder group ID
+    uint32_t response_target_id = 1;   // Placeholder target ID
+    
+    BPG::AppPacketGroup response_group;
+    BPG::AppPacket resp_packet = create_string_packet(response_group_id, response_target_id, "PR", ""); // "PR" = Python Response
+    
+    // Check if data length exceeds capacity (shouldn't if SHM sizes match)
+    if (length > resp_packet.content->internal_binary_bytes.max_size()) {
+         std::cerr << "[SamplePlugin PythonCallback] Error: Received data length (" << length 
+                   << ") exceeds BPG packet binary buffer capacity." << std::endl;
+         // Optionally send an error status back to JS?
+         return;
+    }
+    
+    // Copy data into the BPG packet
+    resp_packet.content->internal_binary_bytes.assign(data, data + length); 
+    
+    response_group.push_back(resp_packet);
+    response_group.back().is_end_of_group = true;
+    
+    // Send the response group using the buffer callbacks
+    uint8_t* buffer = nullptr;
+    uint32_t buffer_size = 0;
+    // Use a reasonable buffer size estimate
+    size_t estimated_size = BPG::BPG_HEADER_SIZE + resp_packet.content->calculateEncodedSize(); 
+
+    // Request buffer - Ensure callbacks are valid
+    if (g_buffer_request_callback && g_buffer_send_callback) {
+        if (g_buffer_request_callback(estimated_size, &buffer, &buffer_size) == 0 && buffer != nullptr) {
+            BPG::BufferWriter stream_writer(buffer, buffer_size);
+            BPG::BpgError encode_err = response_group[0].encode(stream_writer);
+            if (encode_err == BPG::BpgError::Success) {
+                g_buffer_send_callback(stream_writer.size());
+                std::cout << "   Sent Python result back via BPG (Group " << response_group_id << ")." << std::endl;
+            } else {
+                g_buffer_send_callback(0); // Indicate error by sending 0 size
+                std::cerr << "   Error encoding Python result BPG packet: " << static_cast<int>(encode_err) << std::endl;
+            }
+        } else {
+             std::cerr << "   Failed to get buffer for sending Python result." << std::endl;
+             g_buffer_send_callback(0); // Indicate error
+        }
+    } else {
+         std::cerr << "[SamplePlugin PythonCallback] Error: Buffer callbacks not available!" << std::endl;
+    }
+}
 
 // Example function to handle a fully decoded application packet
 static void handle_decoded_packet(const BPG::AppPacket& packet) {
@@ -128,12 +182,32 @@ static void handle_decoded_packet(const BPG::AppPacket& packet) {
         std::cout << std::dec << std::endl; // Reset stream to decimal
     }
 
-    // --- TODO: Add application logic based on packet type/content ---
+    // --- Process TX packet via Python IPC (Now Asynchronous) ---
+    if (strncmp(packet.tl, "TX", 2) == 0 && packet.content && !packet.content->internal_binary_bytes.empty()) {
+        std::cout << "    -> Forwarding TX packet content to Python IPC (Async)..." << std::endl;
+        
+        // Send data asynchronously. The response will arrive via handle_python_data callback.
+        bool send_success = send_data_to_acceptor_async(
+            packet.content->internal_binary_bytes.data(),
+            packet.content->internal_binary_bytes.size()
+        );
+
+        if (!send_success) {
+            std::cerr << "    <- Error sending data to Python IPC via send_data_to_python_async." << std::endl;
+            // Optionally send an immediate error back via BPG or log it
+        } else {
+             std::cout << "    <- Data sent to Python asynchronously." << std::endl;
+        }
+        // --- Remove the old synchronous result handling block ---
+        // std::vector<uint8_t> python_result;
+        // int ipc_ret = process_data_with_python_sync(...);
+        // if (ipc_ret == 0) { ... } else { ... }
+        // -----------------------------------------------------
+    }
+    // -----------------------------------------
+
     if (strncmp(packet.tl, "IM", 2) == 0) {
         std::cout << "    (Packet is an Image)" << std::endl;
-        // Potentially decode using metadata hints
-        // cv::Mat img = cv::imdecode(packet.content->internal_binary_bytes, cv::IMREAD_COLOR);
-        // if (!img.empty()) { /* process image */ }
     }
 }
 
@@ -302,8 +376,8 @@ static void handle_decoded_group(uint32_t group_id, BPG::AppPacketGroup&& group)
 // --- Plugin Interface Implementation --- 
 
 static PluginInfo plugin_info = {
-    "Sample Plugin (BPG Enabled)", // Updated name
-    "1.2.0", // Version bump
+    "Sample Plugin (BPG + Python IPC)", // Updated name
+    "1.3.0", // Version bump
     PLUGIN_API_VERSION
 };
 
@@ -315,18 +389,36 @@ static PluginStatus initialize(MessageCallback send_message,
     g_buffer_send_callback = buffer_send_callback;
     g_bpg_decoder.reset(); // Reset decoder state on initialization
     
-    printf("Sample Plugin Initialized (No Python).\n");
+    printf("Sample Plugin Initializing...\n");
+
+    // Define paths for Python IPC
+    // TODO: Make these paths configurable or relative?
+    std::string python_executable = "/Users/mdm/workspace/LittleJourney/NNLoc/.venv/bin/python";
+    // Use the NEW bidirectional script
+    std::string script_path = "native/plugins/python_bidirectional_ipc_script.py"; 
     
+    // Initialize Python IPC Channel (Bidirectional)
+    // Pass the handle_python_data callback
+    if (!init_acceptor_ipc_bidirectional(python_executable, script_path, handle_python_data)) {
+        std::cerr << "FATAL: Failed to initialize Bi-directional Python IPC channel." << std::endl;
+        return PLUGIN_ERROR_INITIALIZATION; // Use appropriate error code
+    }
+    
+    std::cout << "Sample Plugin Initialized Successfully (with Bi-directional Python IPC)." << std::endl;
     return PLUGIN_SUCCESS;
 }
 
 static void shutdown() {
-    std::cout << "Sample plugin shutdown (No Python)" << std::endl;
+    std::cout << "Sample plugin shutting down..." << std::endl;
+    
+    // Shutdown Bi-directional Python IPC Channel
+    shutdown_acceptor_ipc_bidirectional();
     
     // Reset callbacks
     g_send_message = nullptr;
     g_buffer_request_callback = nullptr;
     g_buffer_send_callback = nullptr;
+    std::cout << "Sample plugin shutdown complete." << std::endl;
 }
 
 // Process incoming raw data from the host using the BPG decoder

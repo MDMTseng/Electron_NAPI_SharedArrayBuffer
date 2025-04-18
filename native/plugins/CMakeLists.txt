@@ -19,12 +19,17 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 # Add shared library for the sample plugin
 add_library(sample_plugin SHARED
     sample_plugin.cc
+    python_ipc.cc
 )
 
 # Link dependencies for sample plugin
 target_link_libraries(sample_plugin PRIVATE 
     ${OpenCV_LIBS}
     bpg_protocol
+    # On Linux, might need -lrt for POSIX shared memory/semaphores
+    # if(UNIX AND NOT APPLE)
+    #   target_link_libraries(sample_plugin PRIVATE rt)
+    # endif()
 )
 target_include_directories(sample_plugin PRIVATE 
     ${CMAKE_SOURCE_DIR}/.. # For plugin_interface.h

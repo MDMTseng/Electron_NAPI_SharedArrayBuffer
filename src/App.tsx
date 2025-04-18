@@ -7,6 +7,26 @@ import { AppPacket, AppPacketGroup } from './lib/BPG_Protocol';
 import { useBPGProtocol, BPGPacketDescriptor, UseBPGProtocolOptions } from './hooks/useBPGProtocol';
 import './App.css';
 
+// Helper function to get hex preview of bytes
+const bytesToHexPreview = (bytes: Uint8Array, maxBytes: number = 30): string => {
+    if (!bytes || bytes.length === 0) {
+        return "(no binary data)";
+    }
+    const byteToHex = (byte: number) => byte.toString(16).padStart(2, '0').toUpperCase();
+    
+    const len = bytes.length;
+    let preview = "";
+
+    if (len <= maxBytes * 2) { // If small enough, show all
+        preview = Array.from(bytes).map(byteToHex).join(' ');
+    } else {
+        const firstPart = Array.from(bytes.slice(0, maxBytes)).map(byteToHex).join(' ');
+        const lastPart = Array.from(bytes.slice(len - maxBytes)).map(byteToHex).join(' ');
+        preview = `First ${maxBytes}: ${firstPart} ... Last ${maxBytes}: ${lastPart}`;
+    }
+    return preview;
+};
+
 function App() {
     const thisRef = useRef<any>({}).current; // Using useRef for mutable values across renders
     const [messages, setMessages] = useState<string[]>([]);
@@ -22,8 +42,33 @@ function App() {
     // --- Use the Custom Hook ---
     const handleUnhandledGroup = useCallback((group: AppPacketGroup) => {
         console.log("[App] Received Unhandled Group:", group);
-        setMessages(prev => [...prev, `[BPG Unhandled Group] GID:${group[0]?.group_id}, Count:${group.length}`]);
-        // Add specific logic here for these groups
+        
+        // Find first packet with binary data for UI log preview
+        let firstBinaryPacket: AppPacket | undefined = undefined;
+        for (const packet of group) {
+            if (packet.content?.binary_bytes?.length > 0) {
+                firstBinaryPacket = packet;
+                break;
+            }
+        }
+
+        let binaryPreview = "(No binary data in group)";
+        if (firstBinaryPacket) {
+            binaryPreview = `First Bin (${firstBinaryPacket.content.binary_bytes.length} bytes, TL:${firstBinaryPacket.tl}): ` + bytesToHexPreview(firstBinaryPacket.content.binary_bytes);
+        }
+        
+        // Construct the message for the UI log, including the preview
+        const groupInfo = `[BPG Unhandled Group] GID:${group[0]?.group_id}, Count:${group.length}, ${binaryPreview}`;
+        setMessages(prev => [...prev, groupInfo]);
+
+        // Keep detailed logging to console
+        group.forEach(packet => {
+            if (packet.content?.binary_bytes?.length > 0) {
+                const hexPreview = bytesToHexPreview(packet.content.binary_bytes);
+                const previewMsg = `  > Console Log: Unhandled TL:${packet.tl}, Bin (${packet.content.binary_bytes.length} bytes): ${hexPreview}`;
+                console.log(previewMsg);
+            }
+        });
     }, []);
 
     const bpgOptions: UseBPGProtocolOptions = {
@@ -197,8 +242,9 @@ function App() {
              if (packet.content.metadata_str) contentPreview += `, Meta: ${packet.content.metadata_str.substring(0, 30)}...`;
              if (packet.content.binary_bytes.length > 0) {
                  contentPreview += `, Bin Size: ${packet.content.binary_bytes.length}`;
-                 const hexPreview = Array.from(packet.content.binary_bytes.slice(0, 16)).map((b: number) => b.toString(16).padStart(2, '0')).join(' ');
-                 contentPreview += ` (Hex: ${hexPreview}${packet.content.binary_bytes.length > 16 ? '...' : ''})`;
+                 // Use the new helper function for hex preview
+                 const hexPreview = bytesToHexPreview(packet.content.binary_bytes);
+                 contentPreview += ` (Hex: ${hexPreview})`; 
                   if (!packet.content.metadata_str && packet.content.binary_bytes.length < 100) {
                      try { const text = new TextDecoder().decode(packet.content.binary_bytes); if (/^[ -~\s]*$/.test(text)) contentPreview += ` (as text: "${text}")` } catch (e: any) { }
                   }
@@ -230,6 +276,9 @@ function App() {
                  }
              }
              // --- End Handle "IM" packets ---
+
+             // Log to console as well for easier inspection
+             console.log(`[App] Received Packet Content: ${contentPreview}`);
 
              setMessages(prev => [...prev, ` < ${contentPreview}`]);
          });
