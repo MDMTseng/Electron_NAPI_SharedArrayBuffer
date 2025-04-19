@@ -8,9 +8,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "build:plugin": "chmod +x native/plugins/build.sh && cd ./native/plugins/ && ./build.sh",
-    "clean:plugin": "rimraf native/plugins/build",
-    "electron:dev": "npm run build:plugin && node-gyp rebuild && concurrently \"vite\" \"electron .\"",
+    "build:plugin": "cd ./APP/backend/ && sh ./build.sh",
+    "clean:plugin": "rimraf APP/backend/build",
+    "electron:dev": "npm run build:plugin && node-gyp rebuild && concurrently \"cd APP/frontend && npm run dev\" \"electron .\"",
     "electron:build": "npm run build:plugin && vite build && electron-builder",
     "rebuild": "node-gyp rebuild",
     "postinstall": "electron-builder install-app-deps && node-gyp rebuild"

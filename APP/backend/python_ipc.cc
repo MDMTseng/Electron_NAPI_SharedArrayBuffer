@@ -168,7 +168,8 @@ bool init_acceptor_ipc_bidirectional( // Renamed function
     std::cout << "[IPC C++] Bi-directional SHM control block initialized." << std::endl;
 
     // --- Launch Acceptor Script --- 
-    std::string command = acceptor_executable + " -u " + acceptor_script_path + " " 
+    std::string full_script_path = "APP/backend/" + acceptor_script_path; // Construct path relative to project root
+    std::string command = acceptor_executable + " -u " + full_script_path + " " 
                          + SHM_NAME_BI + " &"; 
     std::cout << "[IPC C++] Launching Acceptor script: " << command << std::endl;
     int result = system(command.c_str());

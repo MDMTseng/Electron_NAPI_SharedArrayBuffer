@@ -23,7 +23,7 @@ function createWindow() {
 //   } else {
 //     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
 //   }
-  mainWindow.loadURL('http://localhost:5173');
+  mainWindow.loadURL('http://localhost:5174');
   
   // Only open DevTools in development mode
   if (isDev) {

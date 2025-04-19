@@ -1,4 +1,4 @@
-#include "../plugin_interface.h"
+#include "include/plugin_interface.h"
 #include <cstring>
 #include <iostream>
 #include <vector>
@@ -395,7 +395,7 @@ static PluginStatus initialize(MessageCallback send_message,
     // TODO: Make these paths configurable or relative?
     std::string python_executable = "/Users/mdm/workspace/LittleJourney/NNLoc/.venv/bin/python";
     // Use the NEW bidirectional script
-    std::string script_path = "native/plugins/python_bidirectional_ipc_script.py"; 
+    std::string script_path = "python_bidirectional_ipc_script.py"; // Updated path relative to APP/backend
     
     // Initialize Python IPC Channel (Bidirectional)
     // Pass the handle_python_data callback
