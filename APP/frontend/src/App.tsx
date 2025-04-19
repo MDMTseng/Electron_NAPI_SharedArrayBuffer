@@ -307,7 +307,7 @@ function App() {
          const platform = process.platform;
          const pluginExt = platform === 'win32' ? '.dll' : platform === 'darwin' ? '.dylib' : '.so';
          const pluginPrefix = platform === 'win32' ? '' : 'lib';
-         const pluginPath = `${process.cwd()}/native/plugins/build/lib/${pluginPrefix}sample_plugin${pluginExt}`;
+         const pluginPath = `${process.cwd()}/APP/backend/build/lib/${pluginPrefix}sample_plugin${pluginExt}`;
          try {
              const success = nativeAddon.loadPlugin(pluginPath);
              setPluginStatus(success ? 'Plugin loaded successfully' : 'Failed to load plugin');

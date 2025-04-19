@@ -32,7 +32,7 @@ target_link_libraries(sample_plugin PRIVATE
     # endif()
 )
 target_include_directories(sample_plugin PRIVATE 
-    ${CMAKE_SOURCE_DIR}/.. # For plugin_interface.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include # For plugin_interface.h
     ${CMAKE_CURRENT_SOURCE_DIR}/BPG_Protocol # For BPG headers
     ${OpenCV_INCLUDE_DIRS}
 )

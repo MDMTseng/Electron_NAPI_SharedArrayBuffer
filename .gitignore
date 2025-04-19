@@ -3,3 +3,6 @@ build/
 .DS_Store
 .vscode/
 native/plugins/python_script/__pycache__/
+APP/frontend/dist/
+APP/dist/
+APP/backend/build/
