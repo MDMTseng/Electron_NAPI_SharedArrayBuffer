@@ -1,20 +1,13 @@
 import * as path from 'path';
 
 function getAddonPath() {
-    // In development, we need to handle the path differently due to Vite's dev server
-    const isDev = process.env.NODE_ENV === 'development';
-    
-    // if (isDev) {
-    //     // When running in dev mode, we need to go up from the electron.asar
-    //     return path.resolve(__dirname, '../../../../build/Release/addon');
-    // } else {
-    //     // In production, the path will be relative to the app root
-    //     return path.resolve(__dirname, '../build/Release/addon');
-    // }
-
-    //TODO:HACK hard code addon path
-    console.log(__dirname);
-    return `${process.cwd()}/build/Release/addon`;
+    if(process.env.NODE_ENV === 'development') {
+        console.log("DEV MODE");
+        //get electron prj path
+        return `${process.cwd()}/build/Release/addon`;
+    } else {
+        return `${__dirname}/../native/addon`;
+    }
 }
 
 let addon: any;

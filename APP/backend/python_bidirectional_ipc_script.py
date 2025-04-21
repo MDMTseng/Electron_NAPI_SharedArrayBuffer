@@ -140,7 +140,7 @@ def process_data_from_creator(data_len):
             gray_image = np.zeros((height, width), dtype=np.uint8)
             for j in range(height):
                 for i in range(width):
-                    gray_image[j, i] = int(i * (255.0 / (width - 1)))
+                    gray_image[j, i] =int(i * (255.0 / (width - 1)))
             bgr_image = cv2.cvtColor(gray_image, cv2.COLOR_GRAY2BGR)
             rgba_image = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2RGBA)
             response_data = rgba_image.tobytes()

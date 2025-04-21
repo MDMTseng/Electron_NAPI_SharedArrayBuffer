@@ -3,54 +3,155 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const isDev = process.env.NODE_ENV === 'development';
 
-function createWindow() {
-  const mainWindow = new BrowserWindow({
-    width: 800,
-    height: 600,
+// Mode and path will be determined by BIOS selection
+let appMode = null; // 'dev' or 'prod'
+let baseArtifactPath = null; // Base path for artifacts (derived in prod, null in dev)
+let devServerPort = 5173; // Default dev port, can be overridden by BIOS
+let currentArtifactPath = null; // Use path from config
+
+let mainWindow = null;
+let biosWindow = null;
+
+function createBiosWindow() {
+  biosWindow = new BrowserWindow({
+    width: 600,
+    height: 550, // Adjusted height
     webPreferences: {
-      nodeIntegration: true,
-      // contextIsolation: true,
-      // preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: false,
-      devTools: true
-    }
+      nodeIntegration: true, 
+      contextIsolation: false, 
+    },
+    autoHideMenuBar: true,
   });
 
-  // Load the app
-//   if (isDev) {
-//   } else {
-//     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
-//   }
-  mainWindow.loadURL('http://localhost:5174');
-  
-  // Only open DevTools in development mode
-  if (isDev) {
-    mainWindow.webContents.openDevTools();
-    // Suppress Autofill error
-    mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
-      if (message.includes('Autofill.enable')) {
-        event.preventDefault();
-      }
-    });
-  }
+  biosWindow.loadFile('bios.html');
 
-  ipcMain.handle('get_native_api', async (event, filePath) => {
-    return require('./build/Release/addon.node');
+  biosWindow.on('closed', () => {
+    biosWindow = null;
+    if (!mainWindow) {
+      app.quit();
+    }
   });
 }
 
+// Updated to accept config object (mode, devServerPort, artifactPath)
+function createMainWindow(config) {
+  console.log(`Creating main window. Config:`, config);
+  if (biosWindow) {
+    biosWindow.close();
+  }
+  
+  // Store config details globally
+  appMode = config.mode;
+  currentArtifactPath = config.artifactPath; // Use path from config
+  if (config.mode === 'dev' && config.devServerPort) {
+      devServerPort = config.devServerPort;
+  }
+
+  const isDevMode = (appMode === 'dev');
+
+  mainWindow = new BrowserWindow({
+    width: 1000,
+    height: 800,
+    webPreferences: {
+      nodeIntegration: true, 
+      contextIsolation: false, 
+      devTools: true, // Always enable DevTools access
+    }
+  });
+
+  let loadUrl;
+  if (isDevMode) {
+    loadUrl = `http://localhost:${devServerPort}`;
+    console.log(`Loading DEV URL: ${loadUrl}`);
+  } else { // Production mode
+    if (!currentArtifactPath) { // Check the path RECEIVED from BIOS
+      console.error('ERROR: Artifact path is required in production mode!');
+      app.quit();
+      return;
+    }
+    // Construct file path URL using the user-provided artifact path
+    const indexPath = path.join(currentArtifactPath, 'frontend', 'index.html');
+    loadUrl = `file://${indexPath}`;
+    console.log(`Loading PROD URL: ${loadUrl}`);
+  }
+
+  mainWindow.loadURL(loadUrl).catch(err => {
+      console.error(`Failed to load URL ${loadUrl}:`, err);
+  });
+
+  // Send relevant config to renderer once it's ready
+  mainWindow.webContents.on('did-finish-load', () => {
+      // Send the artifact path received from BIOS
+      const rendererConfig = { 
+          mode: appMode, 
+          artifactPath: currentArtifactPath // Send user-provided path (null in dev)
+      };
+      console.log('Main window finished loading. Sending config:', rendererConfig);
+      mainWindow?.webContents.send('set-app-config', rendererConfig);
+  });
+
+  if (isDevMode) {
+    mainWindow.webContents.openDevTools();
+  }
+
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+    if (!biosWindow) {
+        app.quit();
+    }
+  });
+}
+
+// Listen for the signal with config object from bios.html
+ipcMain.on('launch-main-app', (event, config) => {
+  console.log(`Received launch request with config:`, config);
+  if (!mainWindow) { 
+    createMainWindow(config); // Pass the config object
+  } else {
+      console.warn('Main window already exists. Ignoring launch request.');
+  }
+});
+
+// --- Native addon loading (uses currentArtifactPath set from BIOS) ---
+ipcMain.handle('get_native_api', async (event) => {
+  let addonPath;
+  if (appMode === 'dev') { 
+    addonPath = path.join(__dirname, '..', 'build', 'Release', 'addon.node');
+  } else if (appMode === 'prod') {
+    if (!currentArtifactPath) { // Check path received from BIOS
+        console.error("Cannot get native API: Artifact path not provided in production mode.");
+        throw new Error("Artifact path not configured.");
+    }
+    // Path relative to the USER-PROVIDED artifact distribution directory
+    addonPath = path.join(currentArtifactPath, 'native', 'addon.node');
+  } else {
+      console.error("Cannot get native API: App mode not set.");
+      throw new Error("App mode not configured.");
+  }
+  
+  console.log(`Loading native addon from: ${addonPath}`);
+  try {
+      const addon = require(addonPath);
+      return addon;
+  } catch (error) {
+      console.error(`Failed to load native addon from ${addonPath}:`, error);
+      throw new Error(`Failed to load native addon: ${error.message}`);
+  }
+});
+
 app.whenReady().then(() => {
-  createWindow();
+  createBiosWindow();
 
   app.on('activate', function () {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) {
+        if (!mainWindow) createBiosWindow(); 
+    }
   });
 });
 
 app.on('window-all-closed', function () {
-  if (process.platform !== 'darwin') app.quit();
-}); 
-
-
+  if (process.platform !== 'darwin') {
+    app.quit();
+  }
+});

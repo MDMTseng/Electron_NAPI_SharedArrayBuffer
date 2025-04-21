@@ -15,10 +15,11 @@ PluginLoader::~PluginLoader() {
 }
 
 bool PluginLoader::load(const std::string& path) {
+    printf("Loading plugin from: %s\n", path.c_str());
     if (loaded_) {
         unload();
     }
-
+    printf("Loading plugin from: %s\n", path.c_str());
     if (!load_library(path)) {
         std::cerr << "Failed to load plugin library: " << path << std::endl;
         return false;

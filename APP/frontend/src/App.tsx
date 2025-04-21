@@ -7,6 +7,11 @@ import { AppPacket, AppPacketGroup } from './lib/BPG_Protocol';
 import { useBPGProtocol, BPGPacketDescriptor, UseBPGProtocolOptions } from './hooks/useBPGProtocol';
 import './App.css';
 
+// Request ipcRenderer from main process (safer than direct require if contextIsolation is enabled)
+const { ipcRenderer } = window.require ? window.require('electron') : { ipcRenderer: null }; 
+// Basic check if we are in electron environment
+const isElectron = !!ipcRenderer;
+
 // Helper function to get hex preview of bytes
 const bytesToHexPreview = (bytes: Uint8Array, maxBytes: number = 30): string => {
     if (!bytes || bytes.length === 0) {
@@ -31,10 +36,13 @@ function App() {
     const thisRef = useRef<any>({}).current; // Using useRef for mutable values across renders
     const [messages, setMessages] = useState<string[]>([]);
     const [queueStatus, setQueueStatus] = useState('Queue: 0 messages');
-    const [pluginStatus, setPluginStatus] = useState<string>('No plugin loaded');
+    const [pluginStatus, setPluginStatus] = useState<string>('Waiting for config...');
     const [isSending, setIsSending] = useState<boolean>(false); // To disable button during request
     const [receivedImageData, setReceivedImageData] = useState<ImageData | null>(null); // State for the image data
     const canvasRef = useRef<HTMLCanvasElement>(null); // Ref for the canvas element
+    const [artifactPath, setArtifactPath] = useState<string | null>(null); // Store artifact path for prod mode
+    const [appMode, setAppMode] = useState<string | null>(null); // Store 'dev' or 'prod'
+    const [isPluginLoadAttempted, setIsPluginLoadAttempted] = useState<boolean>(false);
 
     const [speedTest_sendCount, setSpeedTest_sendCount] = useState<number>(1);
     const [speedTestStatus, setSpeedTestStatus] = useState<string>('Not started');
@@ -82,46 +90,147 @@ function App() {
     const [bpgTargetId, setBpgTargetId] = useState<number>(1); // Example target ID for messages sent from UI
     const bpgGroupIdRef = useRef<number>(301); // Use ref for group ID to avoid re-renders
 
-    // --- Plugin Loading (remains in App) ---
-     useEffect(() => {
+    // --- Effect to get config from main process --- 
+    useEffect(() => {
+        if (!isElectron) {
+            console.warn("Not running in Electron, cannot get app config.");
+            setPluginStatus("Error: Not in Electron");
+            setAppMode("dev"); // Assume dev if not Electron
+            return;
+        }
+
+        const handleSetConfig = (event: any, config: { mode: string | null, artifactPath: string | null }) => {
+             console.log('[App] Received app config from main:', config);
+             setAppMode(config.mode);
+             setArtifactPath(config.artifactPath);
+             // Update status only if still waiting
+             setPluginStatus(prev => prev === 'Waiting for config...' ? 'Config received, ready to load plugin.' : prev);
+        };
+
+        ipcRenderer?.on('set-app-config', handleSetConfig); // Use the new event name
+        console.log('[App] Listening for app config...');
+
+        // Cleanup listener on unmount
+        return () => {
+            ipcRenderer?.removeListener('set-app-config', handleSetConfig);
+        };
+    }, []);
+
+    // --- Load/Unload Plugin (uses appMode and artifactPath) ---
+    const loadPlugin = useCallback(() => {
+        if (!appMode) { // Check if mode is set
+            setPluginStatus("Waiting for app mode...");
+            console.log("loadPlugin called before appMode was set.");
+            return;
+        }
+        if (!nativeAddon) {
+            setPluginStatus("Error: Native addon not loaded");
+            return;
+        }
+
+        setIsPluginLoadAttempted(true); 
+        setPluginStatus("Loading plugin...");
+
+        const platform = process.platform;
+        const pluginExt = platform === 'win32' ? '.dll' : platform === 'darwin' ? '.dylib' : '.so';
+        const pluginPrefix = platform === 'win32' ? '' : 'lib';
+        
+        let constructedPath = '';
+        if (appMode === "dev") {
+            // In dev, path is relative to project root
+            constructedPath = `${process.cwd()}/APP/backend/build/lib/${pluginPrefix}sample_plugin${pluginExt}`;
+            console.log("Constructed DEV plugin path:", constructedPath);
+        } else if (appMode === "prod") {
+            if (!artifactPath) {
+                setPluginStatus("Error: Artifact path needed for prod mode!");
+                console.error("loadPlugin called in prod mode without artifactPath.");
+                return;
+            }
+            // In prod, path is relative to the artifact path set via BIOS
+
+            console.log("Artifact path:", artifactPath);
+            constructedPath = `${artifactPath}/backend/${pluginPrefix}sample_plugin${pluginExt}`;
+            console.log("Constructed PROD plugin path:", constructedPath);
+        } else {
+            setPluginStatus(`Error: Unknown app mode '${appMode}'`);
+            console.error(`loadPlugin called with unknown mode: ${appMode}`);
+            return;
+        }
+
+        try {
+            const success = nativeAddon.loadPlugin(constructedPath);
+            setPluginStatus(success ? 'Plugin loaded successfully' : 'Failed to load plugin');
+        } catch (error: any) {
+            setPluginStatus(`Error loading plugin: ${error.message || error}`);
+            console.error("Error during nativeAddon.loadPlugin:", error);
+        }
+    }, [appMode, artifactPath, nativeAddon]); // Depend on mode and path
+
+    const unloadPlugin = useCallback(() => {
+        if (!nativeAddon) {
+            setPluginStatus("Error: Native addon not loaded");
+            return;
+        }
+        try {
+            nativeAddon.unloadPlugin();
+            setPluginStatus('Plugin unloaded');
+            setIsPluginLoadAttempted(false); // Allow reloading
+        } catch (error: any) {
+            setPluginStatus(`Error unloading plugin: ${error.message || error}`);
+            console.error("Error during nativeAddon.unloadPlugin:", error);
+        }
+    }, [nativeAddon]);
+
+    // --- Effect to load plugin *after* app mode is set --- 
+    useEffect(() => {
+        if (appMode && !isPluginLoadAttempted) { // Check appMode instead of artifactPath
+            console.log("App mode set, attempting to load plugin.");
+            loadPlugin();
+        }
+    }, [appMode, isPluginLoadAttempted, loadPlugin]); // Depend on appMode now
+
+    // --- Original useEffect for initial setup and cleanup --- (REMOVED plugin load/unload)
+    useEffect(() => {
         // Initialize channel is handled by the hook now
-        loadPlugin(); // Load plugin on mount
-        console.log("Plugin loaded");
-         return () => {
-            unloadPlugin(); // Unload plugin on unmount
-             // Channel cleanup is handled by the hook now
-         };
-     }, []); // Empty dependency array ensures this runs only once on mount
+        // loadPlugin(); // <-- REMOVED from here
+        console.log("Initial App setup effect (excluding plugin load).");
+        return () => {
+            // unloadPlugin(); // <-- REMOVED from here (can be called manually or on window close)
+            // Channel cleanup is handled by the hook now
+            console.log("App unmounting cleanup (excluding plugin unload).");
+        };
+    }, []); // Empty dependency array ensures this runs only once on mount
+
 
     // --- Speed Test / Queue Status Update (uses channel from hook) ---
-     useEffect(() => {
-         if (channel) {
-             // Assign the callback directly to the channel instance from the hook
-             channel.onMessageQueueEmptyCallback = () => {
+    useEffect(() => {
+        if (channel) {
+            // Assign the callback directly to the channel instance from the hook
+            channel.onMessageQueueEmptyCallback = () => {
                 thisRef.sentCounter = (thisRef.sentCounter || 0) + 1; // Increment counter
-                 channel.queueUpdateThrottle.schedule(() => {
-                     updateQueueStatus(channel);
-                     if (channel.messageQueue.length === 0 && thisRef.startTime) { // Check if timing started
-                         let now = Date.now();
-                         let duration = now - thisRef.startTime;
-                         let size_MB = (thisRef.totalSize || 0) / 1024 / 1024;
-                         let speed = duration > 0 ? 1000 * size_MB / duration : 0;
-                         let status = `SendCount:${thisRef.sentCounter} ${size_MB.toFixed(2)} MB, ${duration} ms, ${speed.toFixed(2)} MB/s`;
-                         setSpeedTestStatus(status);
-                         console.log(status);
-                         thisRef.startTime = null; // Reset start time after completion
-                         setIsSending(false); // Re-enable button
-                     }
-                 });
-             };
-         }
-         // Cleanup callback when channel changes or component unmounts
-         return () => {
-             if (channel) {
-                 channel.onMessageQueueEmptyCallback = null;
-             }
-         };
-     }, [channel]); // Re-run if channel instance changes
+                channel.queueUpdateThrottle.schedule(() => {
+                    updateQueueStatus(channel);
+                    if (channel.messageQueue.length === 0 && thisRef.startTime) { // Check if timing started
+                        let now = Date.now();
+                        let duration = now - thisRef.startTime;
+                        let size_MB = (thisRef.totalSize || 0) / 1024 / 1024;
+                        let speed = duration > 0 ? 1000 * size_MB / duration : 0;
+                        let status = `SendCount:${thisRef.sentCounter} ${size_MB.toFixed(2)} MB, ${duration} ms, ${speed.toFixed(2)} MB/s`;
+                        setSpeedTestStatus(status);
+                        console.log(status);
+                        thisRef.startTime = null; // Reset start time after completion
+                        setIsSending(false); // Re-enable button
+                    }
+                });
+            };
+        }
+        // Cleanup callback when channel changes or component unmounts
+        return () => {
+            if (channel) {
+                channel.onMessageQueueEmptyCallback = null;
+            }
+        };
+    }, [channel]); // Re-run if channel instance changes
 
 
     const updateQueueStatus = (currentChannel: SharedMemoryChannel) => {
@@ -302,30 +411,12 @@ function App() {
         }
     }, [receivedImageData]); // Dependency array ensures this runs when receivedImageData changes
 
-    // --- Plugin Loading/Unloading (no change) ---
-     const loadPlugin = () => {
-         const platform = process.platform;
-         const pluginExt = platform === 'win32' ? '.dll' : platform === 'darwin' ? '.dylib' : '.so';
-         const pluginPrefix = platform === 'win32' ? '' : 'lib';
-         const pluginPath = `${process.cwd()}/APP/backend/build/lib/${pluginPrefix}sample_plugin${pluginExt}`;
-         try {
-             const success = nativeAddon.loadPlugin(pluginPath);
-             setPluginStatus(success ? 'Plugin loaded successfully' : 'Failed to load plugin');
-             // Reset decoder state *inside the hook* if needed, or implicitly handled by channel re-init?
-             // Let's assume hook handles reset on init.
-         } catch (error: any) {
-             setPluginStatus(`Error loading plugin: ${error.message || error}`);
-         }
-     };
-     const unloadPlugin = () => {
-        try {
-            nativeAddon.unloadPlugin();
-            setPluginStatus('Plugin unloaded');
-        } catch (error: any) {
-            setPluginStatus(`Error unloading plugin: ${error.message || error}`);
-        }
-    };
+
      const triggerNativeCallback = () => {
+        if (!nativeAddon) {
+             setMessages(prev => [...prev, `Error: Native addon not available.`]);
+             return;
+        }
         nativeAddon.triggerTestCallback();
     };
     // --- End Plugin ---
@@ -371,7 +462,7 @@ function App() {
                 <button onClick={triggerNativeCallback} disabled={isSending}>Trigger Native Callback</button>
             </div>
             <div className="plugin-controls">
-                <button onClick={loadPlugin} disabled={isSending}>Load Plugin</button>
+                <button onClick={loadPlugin} disabled={isSending || !appMode}>Load Plugin</button>
                 <button onClick={unloadPlugin} disabled={isSending}>Unload Plugin</button>
                 <span className="plugin-status">{pluginStatus}</span>
             </div>

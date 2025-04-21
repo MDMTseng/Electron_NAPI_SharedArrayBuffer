@@ -332,7 +332,7 @@ Napi::Value LoadPlugin(const Napi::CallbackInfo& info) {
     }
 
     std::string plugin_path = info[0].As<Napi::String>().Utf8Value();
-    
+    printf("Loading plugin from: %s\n", plugin_path.c_str());
     bool success = g_plugin_loader.load(plugin_path);
     if (success) {
         // Initialize the plugin with our callback

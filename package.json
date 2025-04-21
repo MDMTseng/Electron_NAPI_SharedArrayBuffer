@@ -11,9 +11,11 @@
     "build:plugin": "cd ./APP/backend/ && sh ./build.sh",
     "clean:plugin": "rimraf APP/backend/build",
     "electron:dev": "npm run build:plugin && node-gyp rebuild && concurrently \"cd APP/frontend && npm run dev\" \"electron .\"",
-    "electron:build": "npm run build:plugin && vite build && electron-builder",
-    "rebuild": "node-gyp rebuild",
-    "postinstall": "electron-builder install-app-deps && node-gyp rebuild"
+    "electron:build": "npm run build:plugin && (cd APP/frontend && npm run build) && node-gyp rebuild && electron-builder",
+
+
+    "APP_TEST": "(cd ./APP && ./build_app.sh) && npm run electron:build && npm run APP_RUN_REL",
+    "APP_RUN_REL":"./dist_electron/mac-arm64/ElectronSharedBufferApp.app/Contents/MacOS/ElectronSharedBufferApp"
   },
   "dependencies": {
     "bindings": "^1.5.0",
@@ -33,5 +35,27 @@
     "rimraf": "^5.0.10",
     "typescript": "^5.2.2",
     "vite": "^5.1.4"
+  },
+  "build": {
+    "appId": "com.example.electronsharedbuffer",
+    "productName": "ElectronSharedBufferApp",
+    "directories": {
+      "output": "dist_electron"
+    },
+    "files": [
+      "electron/main.js",
+      "bios.html",
+      "package.json",
+      "APP/dist/**"
+    ],
+    "mac": {
+      "target": "dmg"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
   }
 }

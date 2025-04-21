@@ -6,6 +6,7 @@ echo "Starting APP build process..."
 # --- Configuration ---
 # Script is now inside APP/, paths are relative to APP/
 APP_DIR=$(pwd) # Assume script is run from APP/ directory
+PROJECT_ROOT="${APP_DIR}/.." # Path to the project root
 FRONTEND_DIR="frontend"
 BACKEND_DIR="backend"
 DIST_DIR="dist" # Output directory relative to APP/
@@ -15,7 +16,7 @@ echo "Cleaning and creating distribution directory: ${DIST_DIR}"
 rm -rf "${DIST_DIR}"
 mkdir -p "${DIST_DIR}/frontend"
 mkdir -p "${DIST_DIR}/backend"
-# No longer creating native subdir
+mkdir -p "${DIST_DIR}/native" # <<< Create native subdir
 
 # --- Build Frontend ---
 echo "Building frontend in ${FRONTEND_DIR}..."
@@ -73,19 +74,22 @@ else
     echo "Warning: Python IPC script ${PYTHON_SCRIPT} not found in ${BACKEND_DIR}"
 fi
 
-# --- Build Native Addon --- REMOVED ---
-# echo "Building native addon (${NATIVE_DIR})..."
-# node-gyp rebuild
-# echo "Copying native addon artifact to ${DIST_DIR}/native..."
-# NATIVE_BUILD_DIR="build/Release" # Path relative to project root
-# NATIVE_TARGET_DIR="${DIST_DIR}/native"
-# if [[ -f "${APP_DIR}/../${NATIVE_BUILD_DIR}/addon.node" ]]; then # Adjust path to look in project root build
-#     cp "${APP_DIR}/../${NATIVE_BUILD_DIR}/addon.node" "${NATIVE_TARGET_DIR}/"
-#     echo "Copied addon.node"
-# else
-#     echo "Error: Native addon (addon.node) not found in project root ${NATIVE_BUILD_DIR}"
-#     exit 1
-# fi
+# --- Build Native Addon (NEW) ---
+echo "Building native addon..."
+cd "${PROJECT_ROOT}" # Go up to project root
+node-gyp rebuild
+cd "${APP_DIR}" # Go back to APP dir
+
+echo "Copying native addon artifact to ${DIST_DIR}/native..."
+NATIVE_BUILD_DIR="${PROJECT_ROOT}/build/Release" # Build output is in project root's build dir
+NATIVE_TARGET_DIR="${DIST_DIR}/native"
+if [[ -f "${NATIVE_BUILD_DIR}/addon.node" ]]; then
+    cp "${NATIVE_BUILD_DIR}/addon.node" "${NATIVE_TARGET_DIR}/"
+    echo "Copied addon.node"
+else
+    echo "Error: Native addon (addon.node) not found in ${NATIVE_BUILD_DIR}"
+    exit 1
+fi
 
 # --- Finish ---
 echo "-------------------------------------"

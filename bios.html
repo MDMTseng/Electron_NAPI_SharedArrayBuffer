@@ -1,450 +1,122 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>WebUI Loader</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BIOS - App Configuration</title>
     <style>
-        :root {
-            --main-bg: #1a1a1a;
-            --panel-bg: #242424;
-            --text-color: #e0e0e0;
-            --highlight-color: #ffffff;
-            --border-color: #333333;
-            --selection-bg: #404040;
-            --error-color: #ff4444;
-            --success-color: #44ff44;
-            --shadow-color: rgba(0, 0, 0, 0.5);
-            --glow-color: rgba(255, 255, 255, 0.1);
-        }
-        
-        body {
-            background-color: var(--main-bg);
-            color: var(--text-color);
-            font-family: 'Courier New', monospace;
-            padding: 20px;
-            margin: 0;
-            line-height: 1.6;
-            text-shadow: 0 1px 2px var(--shadow-color);
-        }
-
-        .screen-effect {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            pointer-events: none;
-            background: linear-gradient(
-                135deg,
-                rgba(255, 255, 255, 0.03) 0%,
-                rgba(255, 255, 255, 0) 100%
-            );
-            z-index: 999;
-        }
-
-        .container {
-            max-width: 900px;
-            margin: 0 auto;
-            background-color: var(--panel-bg);
-            padding: 30px;
-            border-radius: 8px;
-            border: 1px solid var(--border-color);
-            box-shadow: 0 10px 30px var(--shadow-color),
-                        0 1px 3px rgba(0, 0, 0, 0.3),
-                        inset 0 1px 1px var(--glow-color);
-        }
-
-        .header {
-            border-bottom: 2px solid var(--border-color);
-            margin-bottom: 30px;
-            padding-bottom: 15px;
-            position: relative;
-        }
-
-        .header h1 {
-            font-size: 24px;
-            margin: 0;
-            padding: 0;
-            letter-spacing: 2px;
-            color: var(--highlight-color);
-            text-shadow: 0 2px 4px var(--shadow-color);
-        }
-
-        .header p {
-            margin: 10px 0 0;
-            color: var(--text-color);
-            font-size: 14px;
-            opacity: 0.8;
-        }
-
-        .menu {
-            margin-bottom: 30px;
-            padding: 20px;
-            border-radius: 6px;
-            background-color: rgba(0, 0, 0, 0.2);
-            box-shadow: inset 0 1px 3px var(--shadow-color),
-                        0 1px 1px var(--glow-color);
-        }
-
-        .menu-item {
-            margin: 10px 0;
-            padding: 15px;
-            background-color: var(--panel-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 4px;
-            cursor: pointer;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            transition: all 0.3s ease;
-            box-shadow: 0 1px 3px var(--shadow-color);
-        }
-
-        .menu-item:hover {
-            background-color: var(--selection-bg);
-            border-color: var(--highlight-color);
-            box-shadow: 0 2px 8px var(--shadow-color),
-                        0 0 0 1px var(--highlight-color);
-            transform: translateY(-1px);
-        }
-
-        .menu-item.selected {
-            border-color: var(--highlight-color);
-            background-color: var(--selection-bg);
-            box-shadow: 0 2px 8px var(--shadow-color),
-                        inset 0 1px 2px var(--shadow-color);
-        }
-
-        select, input[type="text"] {
-            background-color: var(--main-bg);
-            border: 1px solid var(--border-color);
-            color: var(--text-color);
-            padding: 8px 12px;
-            font-family: 'Courier New', monospace;
-            font-size: 16px;
-            transition: all 0.3s ease;
-            width: 100%;
-            border-radius: 4px;
-            box-shadow: inset 0 1px 3px var(--shadow-color);
-        }
-
-        select {
-            width: auto;
-            cursor: pointer;
-            padding-right: 30px;
-            appearance: none;
-            background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e0e0e0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
-            background-repeat: no-repeat;
-            background-position: right 8px center;
-            background-size: 16px;
-        }
-
-        input[type="text"]:focus, select:focus {
-            outline: none;
-            border-color: var(--highlight-color);
-            box-shadow: 0 0 0 2px var(--glow-color),
-                        inset 0 1px 3px var(--shadow-color);
-        }
-
-        .button-group {
-            display: flex;
-            gap: 15px;
-            margin-top: 25px;
-        }
-
-        button {
-            background-color: var(--panel-bg);
-            border: 1px solid var(--border-color);
-            color: var(--text-color);
-            padding: 10px 24px;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            font-family: 'Courier New', monospace;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            min-width: 150px;
-            border-radius: 4px;
-            box-shadow: 0 1px 3px var(--shadow-color),
-                        inset 0 1px 1px var(--glow-color);
-        }
-
-        button:hover {
-            background-color: var(--selection-bg);
-            border-color: var(--highlight-color);
-            box-shadow: 0 4px 12px var(--shadow-color),
-                        0 0 0 1px var(--highlight-color),
-                        inset 0 1px 1px var(--glow-color);
-            transform: translateY(-1px);
-        }
-
-        button:active {
-            transform: translateY(0);
-            box-shadow: 0 1px 3px var(--shadow-color),
-                        inset 0 1px 3px var(--shadow-color);
-        }
-
-        button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none;
-            box-shadow: none;
-        }
-
-        .status {
-            margin-top: 25px;
-            padding: 15px;
-            border-radius: 4px;
-            background-color: var(--panel-bg);
-            font-style: italic;
-            box-shadow: inset 0 1px 3px var(--shadow-color);
-            border-left: 3px solid var(--highlight-color);
-        }
-
-        .status.error {
-            border-left-color: var(--error-color);
-            color: var(--error-color);
-        }
-
-        .footer {
-            margin-top: 30px;
-            padding-top: 20px;
-            border-top: 1px solid var(--border-color);
-            font-size: 14px;
-            color: var(--text-color);
-            text-align: center;
-            opacity: 0.7;
-        }
-
-        .key-hints {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            background-color: var(--panel-bg);
-            padding: 15px;
-            border-radius: 6px;
-            border: 1px solid var(--border-color);
-            box-shadow: 0 4px 12px var(--shadow-color),
-                        inset 0 1px 1px var(--glow-color);
-        }
-
-        .key-hint {
-            margin: 8px 0;
-            font-size: 14px;
-            display: flex;
-            align-items: center;
-        }
-
-        .key {
-            color: var(--highlight-color);
-            border: 1px solid var(--border-color);
-            padding: 3px 8px;
-            margin-right: 8px;
-            border-radius: 3px;
-            background-color: var(--main-bg);
-            box-shadow: inset 0 1px 3px var(--shadow-color),
-                        0 1px 1px var(--glow-color);
-            min-width: 50px;
-            text-align: center;
-        }
+        body { font-family: sans-serif; padding: 20px; background-color: #f0f0f0; }
+        .container { background-color: #fff; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); max-width: 500px; margin: 40px auto; }
+        label { display: block; margin-bottom: 8px; font-weight: bold; }
+        input[type="text"] { width: calc(100% - 22px); padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; }
+        input[type="radio"] { margin-right: 5px; }
+        .radio-group label { display: inline-block; margin-right: 15px; font-weight: normal; }
+        .input-group { margin-bottom: 20px; }
+        #artifactPathGroup { display: none; } /* Ensure this is present and correct */
+        #devServerPortGroup { display: block; } /* Start with dev options visible by default */
+        button { padding: 12px 25px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; margin-top: 10px; }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #cccccc; cursor: not-allowed; }
+        #status { margin-top: 15px; font-style: italic; color: #555; }
     </style>
 </head>
 <body>
-    <div class="screen-effect"></div>
     <div class="container">
-        <div class="header">
-            <h1>WebUI Loader Setup</h1>
-            <p>Configure your WebUI loading preferences</p>
+        <h2>Application Configuration</h2>
+
+        <div class="input-group radio-group">
+            <label>Mode:</label>
+            <label><input type="radio" name="mode" value="dev" checked> Development</label>
+            <label><input type="radio" name="mode" value="prod"> Production</label>
         </div>
+
+        <div id="devServerPortGroup" class="input-group">
+            <label for="devPort">Development Server Port:</label>
+            <input type="number" id="devPort" value="5173" placeholder="e.g., 5173">
+        </div>
+
+        <div id="artifactPathGroup" class="input-group">
+            <label for="artifactPath">Production Artifact Path (APP/dist):</label>
+            <input type="text" id="artifactPath" placeholder="/path/to/your/project/APP/dist">
+            <small>Enter the absolute path to the directory containing the built application (usually APP/dist).</small>
+        </div>
+
+        <button id="launchButton">Launch Application</button>
         
-        <div class="menu">
-            <div class="menu-item">
-                <span>Load Type:</span>
-                <select id="loadType" onchange="toggleLoadType()">
-                    <option value="file">Local File</option>
-                    <option value="url">URL</option>
-                </select>
-            </div>
-
-            <div id="fileOptions">
-                <div class="menu-item" onclick="selectDefaultPath()">
-                    <span>Default WebUI Path</span>
-                    <span>./index.html</span>
-                </div>
-                
-                <div class="menu-item">
-                    <span>Custom Path</span>
-                    <input type="text" id="pathInput" placeholder="Enter path to index.html" 
-                           onclick="event.stopPropagation()" onkeydown="event.stopPropagation()">
-                </div>
-
-                <div class="menu-item" onclick="browseForPath()">
-                    <span>Browse for WebUI</span>
-                    <span>Click to browse...</span>
-                </div>
-            </div>
-
-            <div id="urlOptions" style="display: none;">
-                <div class="menu-item">
-                    <span>WebUI URL</span>
-                    <input type="text" id="urlInput" placeholder="Enter URL (e.g., http://localhost:3000)" 
-                           onclick="event.stopPropagation()" onkeydown="event.stopPropagation()">
-                </div>
-            </div>
-        </div>
-
-        <div class="button-group">
-            <button onclick="loadSelectedWebUI()">Load WebUI [Enter]</button>
-            <button onclick="testPath()">Test Path/URL [F5]</button>
-        </div>
-
-        <div class="status" id="status"></div>
-
-        <div class="footer">
-            WebUI Loader | Build Date: <span id="buildDate"></span>
-        </div>
-    </div>
-
-    <div class="key-hints">
-        <div class="key-hint"><span class="key">Enter</span> Load WebUI</div>
-        <div class="key-hint"><span class="key">F5</span> Test Path</div>
-        <div class="key-hint"><span class="key">ESC</span> Exit</div>
+        <div id="status"></div>
     </div>
 
     <script>
-        let selectedPath = './index.html';
-        let selectedUrl = '';
-        let isUrlMode = false;
+        const { ipcRenderer } = require('electron');
+        const pathInput = document.getElementById('artifactPath');
+        const portInput = document.getElementById('devPort'); 
+        const launchButton = document.getElementById('launchButton');
+        const statusDiv = document.getElementById('status');
+        const modeRadios = document.querySelectorAll('input[name="mode"]');
+        const artifactPathGroup = document.getElementById('artifactPathGroup'); 
+        const devServerPortGroup = document.getElementById('devServerPortGroup'); 
 
-        // Load saved settings when page loads
-        function loadSavedSettings() {
-            try {
-                const settings = JSON.parse(localStorage.getItem('webuiSettings')) || {};
-                isUrlMode = settings.isUrlMode || false;
-                selectedPath = settings.selectedPath || './index.html';
-                selectedUrl = settings.selectedUrl || '';
-
-                document.getElementById('loadType').value = isUrlMode ? 'url' : 'file';
-                document.getElementById('pathInput').value = selectedPath !== './index.html' ? selectedPath : '';
-                document.getElementById('urlInput').value = selectedUrl;
-                
-                toggleLoadType();
-            } catch (err) {
-                showStatus('Error loading saved settings: ' + err.message, true);
+        function updateVisibility() {
+            const selectedMode = document.querySelector('input[name="mode"]:checked').value;
+            if (selectedMode === 'prod') {
+                // Production mode: SHOW artifact path, HIDE dev port
+                artifactPathGroup.style.display = 'block';
+                devServerPortGroup.style.display = 'none'; 
+            } else { // Dev mode
+                // Development mode: HIDE artifact path, SHOW dev port
+                artifactPathGroup.style.display = 'none'; 
+                devServerPortGroup.style.display = 'block'; 
             }
         }
 
-        function saveSettings() {
-            try {
-                const settings = {
-                    isUrlMode,
-                    selectedPath,
-                    selectedUrl: document.getElementById('urlInput').value
-                };
-                localStorage.setItem('webuiSettings', JSON.stringify(settings));
-                showStatus('Settings saved successfully!');
-            } catch (err) {
-                showStatus('Error saving settings: ' + err.message, true);
-            }
-        }
-
-        function showStatus(message, isError = false) {
-            const status = document.getElementById('status');
-            status.textContent = message;
-            status.className = 'status' + (isError ? ' error' : '');
-        }
-
-        function selectDefaultPath() {
-            selectedPath = './index.html';
-            document.getElementById('pathInput').value = '';
-            showStatus('Default path selected');
-            saveSettings();
-        }
-
-        function selectCustomPath() {
-            const input = document.getElementById('pathInput');
-            if (input.value) {
-                selectedPath = input.value;
-                showStatus('Custom path selected');
-                saveSettings();
-            }
-        }
-
-        async function browseForPath() {
-            try {
-                const { ipcRenderer } = require('electron');
-                const result = await ipcRenderer.invoke('dialog:openFile');
-                if (result.filePath) {
-                    selectedPath = result.filePath;
-                    document.getElementById('pathInput').value = result.filePath;
-                    showStatus('Path selected from browser');
-                    saveSettings();
-                }
-            } catch (err) {
-                showStatus('Failed to browse for file: ' + err.message, true);
-            }
-        }
-
-        function toggleLoadType() {
-            const loadType = document.getElementById('loadType').value;
-            isUrlMode = loadType === 'url';
-            document.getElementById('fileOptions').style.display = isUrlMode ? 'none' : 'block';
-            document.getElementById('urlOptions').style.display = isUrlMode ? 'block' : 'none';
-            showStatus(`Ready to load WebUI from ${isUrlMode ? 'URL' : 'file'}`);
-            saveSettings();
-        }
-
-        async function testPath() {
-            try {
-                const { ipcRenderer } = require('electron');
-                if (isUrlMode) {
-                    const url = document.getElementById('urlInput').value;
-                    if (!url) {
-                        showStatus('Please enter a URL', true);
-                        return;
-                    }
-                    const result = await ipcRenderer.invoke('webui:testURL', url);
-                    showStatus(result.message, !result.exists);
-                } else {
-                    const result = await ipcRenderer.invoke('webui:testPath', selectedPath);
-                    showStatus(result.message, !result.exists);
-                }
-            } catch (err) {
-                showStatus(`Failed to test ${isUrlMode ? 'URL' : 'path'}: ${err.message}`, true);
-            }
-        }
-
-        async function loadSelectedWebUI() {
-            try {
-                const { ipcRenderer } = require('electron');
-                if (isUrlMode) {
-                    const url = document.getElementById('urlInput').value;
-                    if (!url) {
-                        showStatus('Please enter a URL', true);
-                        return;
-                    }
-                    await ipcRenderer.invoke('webui:loadURL', url);
-                } else {
-                    await ipcRenderer.invoke('webui:load', selectedPath);
-                }
-            } catch (err) {
-                showStatus(`Failed to load WebUI: ${err.message}`, true);
-            }
-        }
-
-        // Keyboard shortcuts
-        document.addEventListener('keydown', (event) => {
-            if (event.key === 'Enter') {
-                loadSelectedWebUI();
-            } else if (event.key === 'F5') {
-                testPath();
-            }
+        // Add event listeners to radio buttons
+        modeRadios.forEach(radio => {
+            radio.addEventListener('change', updateVisibility);
         });
 
-        // Initialize
-        window.onload = function() {
-            document.getElementById('buildDate').textContent = new Date().toISOString().split('T')[0];
-            loadSavedSettings();
-            showStatus('Ready to load WebUI');
-        };
+        // Initial visibility check on load
+        updateVisibility();
+
+        // Load saved path and port from local storage
+        const savedPath = localStorage.getItem('artifactPath');
+        if (savedPath) pathInput.value = savedPath;
+        const savedPort = localStorage.getItem('devServerPort');
+        if (savedPort) portInput.value = savedPort;
+        
+        launchButton.addEventListener('click', () => {
+            const selectedMode = document.querySelector('input[name="mode"]:checked').value;
+            let config = { mode: selectedMode, artifactPath: null, devServerPort: null };
+
+            if (selectedMode === 'prod') {
+                config.artifactPath = pathInput.value.trim();
+                if (!config.artifactPath) {
+                    statusDiv.textContent = 'Error: Please enter a valid artifact path for Production mode.';
+                    return;
+                }
+                if (!config.artifactPath.includes('/') && !config.artifactPath.includes('\\')) {
+                    statusDiv.textContent = 'Error: The entered path does not look valid.';
+                    return;
+                }
+                localStorage.setItem('artifactPath', config.artifactPath);
+            } else { // Dev mode
+                const portValue = portInput.value.trim();
+                if (!portValue || isNaN(parseInt(portValue))) {
+                    statusDiv.textContent = 'Error: Please enter a valid port number for Development mode.';
+                    return;
+                }
+                config.devServerPort = parseInt(portValue);
+                localStorage.setItem('devServerPort', portValue); 
+            }
+            
+            statusDiv.textContent = 'Launching...';
+            launchButton.disabled = true;
+            pathInput.disabled = true;
+            portInput.disabled = true; 
+            modeRadios.forEach(radio => radio.disabled = true);
+
+            ipcRenderer.send('launch-main-app', config);
+            
+        });
     </script>
 </body>
 </html> 
