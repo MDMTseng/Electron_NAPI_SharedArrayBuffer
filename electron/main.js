@@ -34,6 +34,8 @@ function createBiosWindow() {
   });
 }
 
+
+let current_config = null;
 // Updated to accept config object (mode, devServerPort, artifactPath)
 function createMainWindow(config) {
   console.log(`Creating main window. Config:`, config);
@@ -41,10 +43,11 @@ function createMainWindow(config) {
     biosWindow.close();
   }
   
+  current_config=config;
   // Store config details globally
   appMode = config.mode;
   currentArtifactPath = config.artifactPath; // Use path from config
-  if (config.mode === 'dev' && config.devServerPort) {
+  if (config.devServerPort) {
       devServerPort = config.devServerPort;
   }
 
@@ -61,7 +64,7 @@ function createMainWindow(config) {
   });
 
   let loadUrl;
-  if (isDevMode) {
+  if (devServerPort && !isNaN(devServerPort)) {
     loadUrl = `http://localhost:${devServerPort}`;
     console.log(`Loading DEV URL: ${loadUrl}`);
   } else { // Production mode
@@ -112,6 +115,14 @@ ipcMain.on('launch-main-app', (event, config) => {
       console.warn('Main window already exists. Ignoring launch request.');
   }
 });
+
+ipcMain.on('get-current-config', (event, config) => {
+  console.log('Getting current config:', current_config);
+  event.reply('current-config', current_config);
+  event.returnValue = current_config;
+});
+
+
 
 // --- Native addon loading (uses currentArtifactPath set from BIOS) ---
 ipcMain.handle('get_native_api', async (event) => {

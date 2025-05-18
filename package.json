@@ -13,6 +13,9 @@
     "electron:dev": "npm run build:plugin && node-gyp rebuild && concurrently \"cd APP/frontend && npm run dev\" \"electron .\"",
     "electron:build": "npm run build:plugin && (cd APP/frontend && npm run build) && node-gyp rebuild && electron-builder",
 
+    "electron:electron_run": "electron .",
+    "electron:electron_build": "electron-builder",
+
 
     "APP_TEST": "(cd ./APP && ./build_app.sh) && npm run electron:build && npm run APP_RUN_REL",
     "APP_RUN_REL":"./dist_electron/mac-arm64/ElectronSharedBufferApp.app/Contents/MacOS/ElectronSharedBufferApp"

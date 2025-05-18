@@ -83,10 +83,11 @@
         const savedPort = localStorage.getItem('devServerPort');
         if (savedPort) portInput.value = savedPort;
         
+
         launchButton.addEventListener('click', () => {
             const selectedMode = document.querySelector('input[name="mode"]:checked').value;
             let config = { mode: selectedMode, artifactPath: null, devServerPort: null };
-
+            console.log('savedPath', savedPath, 'savedPort', savedPort);
             if (selectedMode === 'prod') {
                 config.artifactPath = pathInput.value.trim();
                 if (!config.artifactPath) {
@@ -104,7 +105,9 @@
                     statusDiv.textContent = 'Error: Please enter a valid port number for Development mode.';
                     return;
                 }
+                config.mode="prod"
                 config.devServerPort = parseInt(portValue);
+                config.artifactPath = savedPath;
                 localStorage.setItem('devServerPort', portValue); 
             }
             
@@ -113,7 +116,7 @@
             pathInput.disabled = true;
             portInput.disabled = true; 
             modeRadios.forEach(radio => radio.disabled = true);
-
+            console.log('Launching with config:', config);
             ipcRenderer.send('launch-main-app', config);
             
         });
