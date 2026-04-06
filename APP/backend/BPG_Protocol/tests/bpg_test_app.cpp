@@ -1,3 +1,6 @@
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <iostream>
 #include <vector>
 #include <string>
@@ -138,7 +141,7 @@ int testCase_InterleavedGroups() {
     // Calculate total size needed and pre-allocate buffer
     size_t total_estimated_size = 0;
     auto calculate_packet_size = [&](const BPG::AppPacket& p){ 
-        return BPG::BPG_HEADER_SIZE + (p.content ? p.content->calculateEncodedSize() : 0); 
+        return BPG::BPG_WIRE_HEADER_SIZE + (p.content ? p.content->calculateEncodedSize() : 0); 
     };
     for(const auto& p : group101_def) total_estimated_size += calculate_packet_size(p);
     for(const auto& p : group102_def) total_estimated_size += calculate_packet_size(p);
@@ -205,7 +208,7 @@ int testCase_SinglePacketGroup() {
     printAppPacket(single_packet);
 
     // Allocate buffer and writer
-    size_t required_size = BPG::BPG_HEADER_SIZE + (single_packet.content ? single_packet.content->calculateEncodedSize() : 0);
+    size_t required_size = BPG::BPG_WIRE_HEADER_SIZE + (single_packet.content ? single_packet.content->calculateEncodedSize() : 0);
     std::vector<uint8_t> buffer_vec(required_size);
     BPG::BufferWriter writer(buffer_vec.data(), buffer_vec.size());
 

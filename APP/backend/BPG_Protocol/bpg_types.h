@@ -5,16 +5,26 @@
 #include <string>
 #include <cstring> // For memcpy
 #include <numeric> // For std::accumulate (can be replaced if needed)
+#ifdef _WIN32
+#include <winsock2.h>
+#pragma comment(lib, "ws2_32.lib")
+#else
 #include <arpa/inet.h> // For htonl
+#endif
 #include <memory> // <<< RE-ADDED for std::shared_ptr >>>
 #include "buffer_writer.h" // Include BufferWriter definition
 // #include <array> // No longer needed
 
 namespace BPG {
 
-// Fixed size of the BPG packet header in bytes.
-// Breakdown: group_id(4) + target_id(4) + tl(2) + prop(4) + data_length(4) = 18
+// Wire format: [magic 4 BE][inner header 18 bytes][payload]
+// Inner header: TL(2) + prop(4) + target_id(4) + group_id(4) + data_length(4)
+constexpr uint32_t BPG_FRAME_MAGIC = 0x42504701u; // 'BPG\x01'
+constexpr size_t BPG_FRAME_PREFIX_SIZE = 4;
+
+// Fixed size of the inner BPG packet header in bytes (after frame magic).
 constexpr size_t BPG_HEADER_SIZE = 18;
+constexpr size_t BPG_WIRE_HEADER_SIZE = BPG_FRAME_PREFIX_SIZE + BPG_HEADER_SIZE;
 constexpr uint32_t BPG_PROP_EG_BIT_MASK = 0x00000001; // Mask for the EG bit (LSB of prop field)
 
 // Two-letter packet type identifier
@@ -42,9 +52,12 @@ struct PacketHeader {
 
     // Helper to encode header into a writer
     BpgError encode(BufferWriter& writer) const {
-        if (!writer.canWrite(BPG_HEADER_SIZE)) {
+        if (!writer.canWrite(BPG_WIRE_HEADER_SIZE)) {
             return BpgError::BufferTooSmall;
         }
+        uint32_t magic_n = htonl(BPG_FRAME_MAGIC);
+        writer.write(&magic_n, sizeof(magic_n));
+
         uint32_t group_id_n = htonl(group_id);
         uint32_t target_id_n = htonl(target_id);
         uint32_t prop_n = htonl(prop);
@@ -112,11 +125,82 @@ class HybridData {
             writer.write(internal_binary_bytes.data(), internal_binary_bytes.size());
             return BpgError::Success;
         }
+        else if (external_binary_bytes.size() > 0) {
+            if (!writer.canWrite(external_binary_bytes.size())) return BpgError::BufferTooSmall;
+            writer.write(external_binary_bytes.data(), external_binary_bytes.size());
+            return BpgError::Success;
+        }
         return BpgError::Success;
     }
 
     HybridData() : external_binary_bytes(nullptr, 0) {}
 };
+
+// Structure representing a packet at the application layer
+// struct AppPacket {
+//     uint32_t group_id;
+//     uint32_t target_id;
+//     PacketType tl;
+//     bool is_end_of_group; // Flag to indicate if this is the last packet of the group
+//     std::shared_ptr<HybridData> content;
+
+//     // Encodes the entire AppPacket (header + content) into the BufferWriter.
+//     BpgError encode(BufferWriter& writer) const {
+//         if (!content) {
+//             printf("content is null\n");
+//             uint32_t data_len = 0; 
+//             PacketHeader header;
+//             header.group_id = group_id;
+//             header.target_id = target_id;
+//             std::memcpy(header.tl, tl, sizeof(PacketType));
+//             header.prop = is_end_of_group ? BPG_PROP_EG_BIT_MASK : 0;
+//             header.data_length = data_len;
+//             return header.encode(writer);
+//         }
+
+//         // 1. Calculate data length (using pointer & virtual call)
+//         uint32_t data_len = static_cast<uint32_t>(content->calculateEncodedSize());
+        
+//         // 2. Construct Header
+//         PacketHeader header;
+//         header.group_id = group_id;
+//         header.target_id = target_id;
+//         std::memcpy(header.tl, tl, sizeof(PacketType));
+//         header.prop = is_end_of_group ? BPG_PROP_EG_BIT_MASK : 0;
+//         header.data_length = data_len;
+
+//         // 3. Check if writer has enough space for header AND data
+//         size_t total_required = BPG_HEADER_SIZE + data_len;
+//         if (!writer.canWrite(total_required)) {
+//             return BpgError::BufferTooSmall;
+//         }
+
+//         // 4. Encode Header
+//         BpgError header_err = header.encode(writer);
+//         if (header_err != BpgError::Success) {
+//             return header_err;
+//         }
+
+//         // 5. Encode Content (using pointer & virtual call)
+//         BpgError content_err = content->encode(writer);
+//         if (content_err != BpgError::Success) {
+//             return content_err;
+//         }
+
+
+//         // {//print raw data in hex
+//         //     uint8_t* buf = writer.raw_data();
+//         //     for(int i=0;i<writer.size();i++){
+//         //         printf("%02x ", buf[i]);
+//         //     }
+//         //     printf("\n");
+//         // }
+//         return BpgError::Success;
+//     }
+// };
+
+
+
 
 // Structure representing a packet at the application layer
 struct AppPacket {
@@ -126,6 +210,45 @@ struct AppPacket {
     bool is_end_of_group; // Flag to indicate if this is the last packet of the group
     std::shared_ptr<HybridData> content;
 
+
+
+    static BpgError s_encode(
+        uint32_t group_id, uint32_t target_id, const PacketType tl, uint32_t prop,
+        uint32_t strlength,const char* str,
+        uint32_t binary_length,uint8_t* binary,
+        BufferWriter& dst_writer) {
+        PacketHeader header;
+        header.group_id = group_id;
+        header.target_id = target_id;
+        std::memcpy(header.tl, tl, sizeof(PacketType));
+        header.prop = prop;
+
+        header.data_length = sizeof(uint32_t) + strlength+binary_length;
+
+        size_t total_required = BPG_WIRE_HEADER_SIZE + header.data_length;
+        if (!dst_writer.canWrite(total_required)) {
+            return BpgError::BufferTooSmall;
+        }
+
+        // 4. Encode Header
+        BpgError header_err = header.encode(dst_writer);
+        if (header_err != BpgError::Success) {
+            return header_err;
+        }
+
+
+        {
+            uint32_t strlength_n = htonl(strlength);
+            dst_writer.write(&strlength_n, sizeof(uint32_t));
+            dst_writer.write(str, strlength);
+
+ 
+        }
+
+
+
+        return BpgError::Success;
+    }
     // Encodes the entire AppPacket (header + content) into the BufferWriter.
     BpgError encode(BufferWriter& writer) const {
         if (!content) {
@@ -140,36 +263,13 @@ struct AppPacket {
             return header.encode(writer);
         }
 
-        // 1. Calculate data length (using pointer & virtual call)
-        uint32_t data_len = static_cast<uint32_t>(content->calculateEncodedSize());
-        
-        // 2. Construct Header
-        PacketHeader header;
-        header.group_id = group_id;
-        header.target_id = target_id;
-        std::memcpy(header.tl, tl, sizeof(PacketType));
-        header.prop = is_end_of_group ? BPG_PROP_EG_BIT_MASK : 0;
-        header.data_length = data_len;
-
-        // 3. Check if writer has enough space for header AND data
-        size_t total_required = BPG_HEADER_SIZE + data_len;
-        if (!writer.canWrite(total_required)) {
-            return BpgError::BufferTooSmall;
-        }
-
-        // 4. Encode Header
-        BpgError header_err = header.encode(writer);
-        if (header_err != BpgError::Success) {
-            return header_err;
-        }
-
-        // 5. Encode Content (using pointer & virtual call)
-        BpgError content_err = content->encode(writer);
-        if (content_err != BpgError::Success) {
-            return content_err;
-        }
-
-        return BpgError::Success;
+        return s_encode(
+            group_id, target_id, tl, is_end_of_group ? BPG_PROP_EG_BIT_MASK : 0, 
+            content->metadata_str.length(), 
+            content->metadata_str.data(), 
+            content->internal_binary_bytes.size(), 
+            content->internal_binary_bytes.data(), 
+            writer);
     }
 };
 

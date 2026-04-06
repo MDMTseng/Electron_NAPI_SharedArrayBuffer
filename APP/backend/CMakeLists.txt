@@ -16,10 +16,15 @@ add_subdirectory(BPG_Protocol)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
-# Add shared library for the sample plugin
+# Add shared library for the sample plugin (POSIX Python IPC only on non-Windows)
+if(WIN32)
+    set(SAMPLE_PLUGIN_IPC_SRC python_ipc_win.cpp)
+else()
+    set(SAMPLE_PLUGIN_IPC_SRC python_ipc.cc)
+endif()
 add_library(sample_plugin SHARED
     sample_plugin.cc
-    python_ipc.cc
+    ${SAMPLE_PLUGIN_IPC_SRC}
 )
 
 # Link dependencies for sample plugin

@@ -5,7 +5,13 @@
 #include <cstring> // For memcpy
 #include <vector>
 #include <string>
+#ifdef _WIN32
+#include <winsock2.h>
+#pragma comment(lib, "ws2_32.lib")
+#else
 #include <arpa/inet.h> // For htonl
+#endif
+
 
 namespace BPG {
 
@@ -74,6 +80,10 @@ public:
     return append(vec.data(), vec.size());
     }
 
+    void clear(){
+        current_offset_ = 0;
+    }
+
     uint8_t* claim_space(size_t size){
         if(!canWrite(size)){
             return nullptr;
@@ -117,6 +127,14 @@ public:
         return current_offset_;
     }
 
+    bool backspace(size_t length){
+        if(current_offset_ < length){
+            return false;
+        }
+        current_offset_ -= length;
+        return true;
+    }
+
     // Returns total capacity
     size_t capacity() const {
         return capacity_;
@@ -138,6 +156,7 @@ public:
         }
         std::memcpy(start_ptr_ + current_offset_, writer.data(), writer.size());
         current_offset_ += writer.size();
+        return true;
     }
 };
 // --- End BufferWriter ---

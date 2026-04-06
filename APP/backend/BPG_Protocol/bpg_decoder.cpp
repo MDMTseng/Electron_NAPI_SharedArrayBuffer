@@ -1,6 +1,12 @@
 #include "bpg_decoder.h"
 #include <cstring> // For memcpy, memcmp
-#include <arpa/inet.h> // For ntohl, htonl (assuming network byte order)
+
+#ifdef _WIN32
+#include <winsock2.h>
+#pragma comment(lib, "ws2_32.lib")
+#else
+#include <arpa/inet.h> // For htonl
+#endif
 #include <iostream> // For potential debug output
 #include <algorithm> // For std::copy, std::copy_n, std::min
 #include <iterator> // For std::make_move_iterator, std::next
@@ -120,54 +126,61 @@ static BpgError parseDataFromBuffer(const PacketHeader& header, const uint8_t* d
 bool BpgDecoder::tryParsePacket(std::deque<uint8_t>& buffer,
                             const AppPacketCallback& packet_callback,
                             const AppPacketGroupCallback& group_callback) {
-    // --- Step 1: Check if enough data for header using constant size --- 
-    if (buffer.size() < BPG_HEADER_SIZE) { // Use constant
-        return false; // Not enough data yet
+    // --- Step 1: Frame magic + inner header --- 
+    if (buffer.size() < BPG_FRAME_PREFIX_SIZE) {
+        return false;
+    }
+    uint32_t magic_n;
+    std::memcpy(&magic_n, &buffer[0], sizeof(magic_n));
+    if (ntohl(magic_n) != BPG_FRAME_MAGIC) {
+        buffer.erase(buffer.begin());
+        return true; // resync one byte at a time
     }
 
-    // --- Step 2: Peek at header to get data_length --- 
-    // Copy exactly BPG_HEADER_SIZE bytes for peeking
-    uint8_t header_peek_bytes[BPG_HEADER_SIZE]; // Use constant
-    std::copy_n(buffer.begin(), BPG_HEADER_SIZE, header_peek_bytes); // Use constant
+    if (buffer.size() < BPG_WIRE_HEADER_SIZE) {
+        return false;
+    }
+
+    // --- Step 2: Peek inner header (after magic) to get data_length --- 
+    uint8_t header_peek_bytes[BPG_HEADER_SIZE];
+    std::copy_n(std::next(buffer.begin(), static_cast<std::ptrdiff_t>(BPG_FRAME_PREFIX_SIZE)),
+                BPG_HEADER_SIZE,
+                header_peek_bytes);
     PacketHeader peek_header;
-    // Pass BPG_HEADER_SIZE as the length we copied
-    if (!parseHeaderFromBuffer(header_peek_bytes, BPG_HEADER_SIZE, peek_header)) { 
+    if (!parseHeaderFromBuffer(header_peek_bytes, BPG_HEADER_SIZE, peek_header)) {
          std::cerr << "[BPG Decode ERR] Header peek failed during parseHeaderFromBuffer." << std::endl;
-         reset(); 
-         return false; 
+         reset();
+         return false;
     }
     uint32_t data_length = peek_header.data_length;
-    // Calculate total size using the constant
-    size_t total_packet_size = BPG_HEADER_SIZE + data_length; 
-    
-    // --- Step 3: Check if enough data for the *entire* packet --- 
+    size_t total_packet_size = BPG_WIRE_HEADER_SIZE + data_length;
+
+    // --- Step 3: Enough data for full packet --- 
     if (buffer.size() < total_packet_size) {
-        return false; // Not enough data yet
+        return false;
     }
 
-    // --- Step 4: Copy the full potential packet data to a contiguous buffer --- 
+    // --- Step 4: Copy full packet --- 
     std::vector<uint8_t> temp_packet_buffer(total_packet_size);
     std::copy_n(buffer.begin(), total_packet_size, temp_packet_buffer.begin());
 
-    // --- Step 5: Parse Header and Data from the contiguous buffer --- 
-    PacketHeader header; 
-    HybridData hybrid_data; 
+    // --- Step 5: Parse inner header + payload --- 
+    PacketHeader header;
+    HybridData hybrid_data;
 
-    // Parse header from temp buffer, passing its actual size
-    if (!parseHeaderFromBuffer(temp_packet_buffer.data(), temp_packet_buffer.size(), header)) {
+    if (!parseHeaderFromBuffer(temp_packet_buffer.data() + BPG_FRAME_PREFIX_SIZE, BPG_HEADER_SIZE, header)) {
          std::cerr << "[BPG Decode ERR] Header parse failed on temp buffer." << std::endl;
          buffer.erase(buffer.begin(), buffer.begin() + total_packet_size);
-         return true; 
+         return true;
     }
     if (header.data_length != data_length) {
-         std::cerr << "[BPG Decode ERR] Peeked data length (" << data_length 
+         std::cerr << "[BPG Decode ERR] Peeked data length (" << data_length
                    << ") != Parsed data length (" << header.data_length << "). Corrupted header? Discarding." << std::endl;
          buffer.erase(buffer.begin(), buffer.begin() + total_packet_size);
          return true;
     }
 
-    // Parse data from temp buffer (pointing after the fixed header size)
-    BpgError data_err = parseDataFromBuffer(header, temp_packet_buffer.data() + BPG_HEADER_SIZE, hybrid_data);
+    BpgError data_err = parseDataFromBuffer(header, temp_packet_buffer.data() + BPG_WIRE_HEADER_SIZE, hybrid_data);
 
     // --- Step 6: Consume data from the main deque buffer --- 
     buffer.erase(buffer.begin(), buffer.begin() + total_packet_size);

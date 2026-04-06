@@ -35,6 +35,10 @@ include_directories(${OpenCV_INCLUDE_DIRS})
 add_executable(bpg_test_app tests/bpg_test_app.cpp)
 target_link_libraries(bpg_test_app PRIVATE bpg_protocol ${OpenCV_LIBS})
 
+if(WIN32)
+    target_link_libraries(bpg_test_app PRIVATE ws2_32)
+endif()
+
 # Define installation rules if needed
 # install(TARGETS bpg_protocol DESTINATION lib)
 # install(FILES bpg_types.h bpg_encoder.h bpg_decoder.h DESTINATION include/bpg_protocol) 

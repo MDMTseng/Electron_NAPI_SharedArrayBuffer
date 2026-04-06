@@ -1,3 +1,6 @@
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include "include/plugin_interface.h"
 #include <cstring>
 #include <iostream>
