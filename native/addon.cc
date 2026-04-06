@@ -336,9 +336,9 @@ Napi::Value LoadPlugin(const Napi::CallbackInfo& info) {
     bool success = g_plugin_loader.load(plugin_path);
     if (success) {
         // Initialize the plugin with our callback
-        const PluginInterface* interface = g_plugin_loader.get_interface();
-        if (interface) {
-            interface->initialize(memcpy_to_shared_buffer,
+        const PluginInterface* iface = g_plugin_loader.get_interface();
+        if (iface) {
+            iface->initialize(memcpy_to_shared_buffer,
             req_available_buffer,send_current_buffer);
         }
     }
