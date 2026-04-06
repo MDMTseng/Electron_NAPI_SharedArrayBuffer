@@ -105,7 +105,7 @@
                     statusDiv.textContent = 'Error: Please enter a valid port number for Development mode.';
                     return;
                 }
-                config.mode="prod"
+                config.mode="dev"
                 config.devServerPort = parseInt(portValue);
                 config.artifactPath = savedPath;
                 localStorage.setItem('devServerPort', portValue); 
