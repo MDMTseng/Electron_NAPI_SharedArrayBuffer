@@ -42,6 +42,10 @@ describe('Electron E2E Tests', { timeout: 60000 }, () => {
         // package.json's "main" field, which resolves bios.html correctly.
         electronApp = await electron.launch({
             args: [ROOT],
+            env: {
+                ...process.env,
+                ELECTRON_FORCE_BIOS: '1',
+            },
         });
     });
 
@@ -213,6 +217,10 @@ describe('UI Interaction Tests', { timeout: 60000 }, () => {
         // Launch a fresh Electron instance
         electronApp = await electron.launch({
             args: [ROOT],
+            env: {
+                ...process.env,
+                ELECTRON_FORCE_BIOS: '1',
+            },
         });
 
         // --- Navigate through BIOS in prod mode ---

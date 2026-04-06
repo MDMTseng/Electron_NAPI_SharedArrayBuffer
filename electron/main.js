@@ -1,8 +1,72 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'path';
+import fs from 'fs';
+import http from 'http';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+const DEFAULT_DEV_PORT = 5173;
+
+/** True if something accepts HTTP on 127.0.0.1:port (e.g. Vite dev server). */
+function probeDevServer(port, timeoutMs = 500) {
+  return new Promise((resolve) => {
+    const req = http.get(
+      `http://127.0.0.1:${port}/`,
+      { timeout: timeoutMs },
+      (res) => {
+        res.resume();
+        resolve(true);
+      }
+    );
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
+}
+
+function defaultProdArtifactPath() {
+  return path.join(__dirname, '..', 'APP', 'dist');
+}
+
+/** When set (e.g. E2E tests), always show BIOS and skip dev-server / dist auto-detect. */
+function shouldForceBios() {
+  return (
+    process.env.ELECTRON_FORCE_BIOS === '1' ||
+    process.env.XINSP_SKIP_AUTO_LAUNCH === '1'
+  );
+}
+
+/**
+ * Skip BIOS when dev server is up, or when a built APP/dist exists next to the framework.
+ */
+async function tryAutoLaunchFromEnvironment() {
+  if (await probeDevServer(DEFAULT_DEV_PORT)) {
+    if (!mainWindow) {
+      createMainWindow({
+        mode: 'dev',
+        devServerPort: DEFAULT_DEV_PORT,
+        artifactPath: null,
+      });
+    }
+    return true;
+  }
+  const artifact = defaultProdArtifactPath();
+  const indexHtml = path.join(artifact, 'frontend', 'index.html');
+  if (fs.existsSync(indexHtml)) {
+    if (!mainWindow) {
+      createMainWindow({
+        mode: 'prod',
+        artifactPath: artifact,
+        devServerPort: null,
+      });
+    }
+    return true;
+  }
+  return false;
+}
 
 // Mode and path will be determined by BIOS selection
 let appMode = null; // 'dev' or 'prod'
@@ -151,12 +215,28 @@ ipcMain.handle('get_native_api', async (event) => {
   }
 });
 
-app.whenReady().then(() => {
-  createBiosWindow();
+app.whenReady().then(async () => {
+  if (shouldForceBios()) {
+    createBiosWindow();
+  } else {
+    const auto = await tryAutoLaunchFromEnvironment();
+    if (!auto) {
+      createBiosWindow();
+    }
+  }
 
-  app.on('activate', function () {
+  app.on('activate', async function () {
     if (BrowserWindow.getAllWindows().length === 0) {
-        if (!mainWindow) createBiosWindow(); 
+      if (!mainWindow) {
+        if (shouldForceBios()) {
+          createBiosWindow();
+        } else {
+          const ok = await tryAutoLaunchFromEnvironment();
+          if (!ok) {
+            createBiosWindow();
+          }
+        }
+      }
     }
   });
 });
