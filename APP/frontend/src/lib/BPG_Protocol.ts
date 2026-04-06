@@ -24,10 +24,12 @@ export type AppPacketGroup = AppPacket[];
 export type PacketCallback = (packet: AppPacket) => void;
 export type GroupCallback = (groupId: number, group: AppPacketGroup) => void;
 
-// Constants
-export const HEADER_SIZE = 18; // Updated Size
+export const BPG_FRAME_MAGIC = 0x42504701;
+export const FRAME_PREFIX_SIZE = 4;
+export const HEADER_SIZE = 18;
+export const WIRE_HEADER_SIZE = FRAME_PREFIX_SIZE + HEADER_SIZE;
 const PROP_EG_BIT_MASK = 0x00000001;
-const STR_LENGTH_SIZE = 4; // Renamed from JSON_LENGTH_SIZE for clarity
+const STR_LENGTH_SIZE = 4;
 
 // --- Encoder --- 
 
@@ -38,15 +40,22 @@ export class BpgEncoder {
         return STR_LENGTH_SIZE + strBytes.length + data.binary_bytes.length;
     }
 
+    encodedPacketSize(packet: AppPacket): number {
+        return WIRE_HEADER_SIZE + this.calculateHybridDataSize(packet.content);
+    }
+
     encodePacket(packet: AppPacket): Uint8Array {
         const dataSize = this.calculateHybridDataSize(packet.content);
-        const totalSize = HEADER_SIZE + dataSize;
+        const totalSize = WIRE_HEADER_SIZE + dataSize;
         let offset = 0;
         const buffer = new ArrayBuffer(totalSize);
         const dataView = new DataView(buffer);
         const packetBytes = new Uint8Array(buffer);
 
-        // --- Header (New Order) --- 
+        dataView.setUint32(offset, BPG_FRAME_MAGIC, false);
+        offset += FRAME_PREFIX_SIZE;
+
+        // --- Inner header --- 
         // TL (2 bytes)
         packetBytes[offset++] = packet.tl.charCodeAt(0);
         packetBytes[offset++] = packet.tl.charCodeAt(1);
@@ -100,7 +109,7 @@ export class BpgEncoder {
     // encodePacketGroup remains the same conceptually, just calls the updated encodePacket
     encodePacketGroup(group: AppPacketGroup): Uint8Array {
          let totalSize = 0;
-         group.forEach(packet => { totalSize += HEADER_SIZE + this.calculateHybridDataSize(packet.content); });
+         group.forEach(packet => { totalSize += WIRE_HEADER_SIZE + this.calculateHybridDataSize(packet.content); });
          
          const combinedBuffer = new Uint8Array(totalSize);
          let currentOffset = 0;
@@ -137,19 +146,26 @@ export class BpgDecoder {
         this.internal_buffer = newData;
 
         while (true) {
-            if (this.internal_buffer.length < HEADER_SIZE) break; // 18 bytes
+            if (this.internal_buffer.length < FRAME_PREFIX_SIZE) break;
+
+            const dv0 = new DataView(this.internal_buffer.buffer, this.internal_buffer.byteOffset, this.internal_buffer.byteLength);
+            if (dv0.getUint32(0, false) !== BPG_FRAME_MAGIC) {
+                this.internal_buffer = this.internal_buffer.slice(1);
+                continue;
+            }
+
+            if (this.internal_buffer.length < WIRE_HEADER_SIZE) break;
 
             const dataView = new DataView(this.internal_buffer.buffer, this.internal_buffer.byteOffset, this.internal_buffer.byteLength);
             
-            // Deserialize Header (New Order)
-            let offset = 0;
-            const tl = String.fromCharCode(this.internal_buffer[offset], this.internal_buffer[offset+1]); offset += 2; // TL (2 bytes)
-            const propValue = dataView.getUint32(offset, false); offset += 4;                           // Prop (4 bytes)
-            const targetId = dataView.getUint32(offset, false); offset += 4;                            // Target ID (4 bytes)
-            const groupId = dataView.getUint32(offset, false); offset += 4;                             // Group ID (4 bytes)
-            const dataLength = dataView.getUint32(offset, false); offset += 4;                          // Data Length (4 bytes)
+            let offset = FRAME_PREFIX_SIZE;
+            const tl = String.fromCharCode(this.internal_buffer[offset], this.internal_buffer[offset+1]); offset += 2;
+            const propValue = dataView.getUint32(offset, false); offset += 4;
+            const targetId = dataView.getUint32(offset, false); offset += 4;
+            const groupId = dataView.getUint32(offset, false); offset += 4;
+            const dataLength = dataView.getUint32(offset, false); offset += 4;
             
-            const totalPacketSize = HEADER_SIZE + dataLength;
+            const totalPacketSize = WIRE_HEADER_SIZE + dataLength;
             if (this.internal_buffer.length < totalPacketSize) break; 
 
             // Check EG Bit from prop field LSB
@@ -157,7 +173,7 @@ export class BpgDecoder {
 
             // --- Deserialize HybridData ---
             const hybridData: HybridData = { metadata_str: "", binary_bytes: new Uint8Array(0) };
-            let dataOffset = HEADER_SIZE; 
+            let dataOffset = WIRE_HEADER_SIZE; 
             
             if(dataLength < STR_LENGTH_SIZE) {
                  console.error(`BPG Decoder: HdrDataLen (${dataLength}) < StrLenSize (${STR_LENGTH_SIZE}). Skipping packet.`);

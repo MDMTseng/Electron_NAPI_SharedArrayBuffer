@@ -5,6 +5,8 @@ import {
     AppPacket,
     AppPacketGroup,
     HEADER_SIZE,
+    WIRE_HEADER_SIZE,
+    BPG_FRAME_MAGIC,
 } from '../BPG_Protocol';
 
 function makePacket(overrides: Partial<AppPacket> = {}): AppPacket {
@@ -318,16 +320,42 @@ describe('BPG Protocol', () => {
     // Header size constant
     // ----------------------------------------------------------------
     describe('constants', () => {
-        it('HEADER_SIZE should be 18', () => {
+        it('HEADER_SIZE should be 18 (inner header after magic)', () => {
             expect(HEADER_SIZE).toBe(18);
         });
 
-        it('encoded packet size should equal HEADER_SIZE + data length', () => {
+        it('WIRE_HEADER_SIZE should be 22 (4-byte magic + inner header)', () => {
+            expect(WIRE_HEADER_SIZE).toBe(22);
+        });
+
+        it('encoded packet size should equal WIRE_HEADER_SIZE + hybrid payload', () => {
             const packet = makePacket();
             const encoded = encoder.encodePacket(packet);
             const metaBytes = new TextEncoder().encode(packet.content.metadata_str);
             const expectedDataSize = 4 + metaBytes.length + packet.content.binary_bytes.length;
-            expect(encoded.length).toBe(HEADER_SIZE + expectedDataSize);
+            expect(encoded.length).toBe(WIRE_HEADER_SIZE + expectedDataSize);
+            expect(encoder.encodedPacketSize(packet)).toBe(encoded.length);
+        });
+
+        it('should expose BPG magic at bytes 0..3 (big-endian)', () => {
+            const packet = makePacket();
+            const encoded = encoder.encodePacket(packet);
+            const v = new DataView(encoded.buffer, encoded.byteOffset, encoded.byteLength);
+            expect(v.getUint32(0, false)).toBe(BPG_FRAME_MAGIC);
+        });
+    });
+
+    describe('framing / resync', () => {
+        it('should skip a leading garbage byte then decode', () => {
+            const packet = makePacket();
+            const encoded = encoder.encodePacket(packet);
+            const garbled = new Uint8Array(1 + encoded.length);
+            garbled[0] = 0xff;
+            garbled.set(encoded, 1);
+            const decoded: AppPacket[] = [];
+            decoder.processData(garbled, (p) => decoded.push(p), () => {});
+            expect(decoded).toHaveLength(1);
+            expect(decoded[0].tl).toBe(packet.tl);
         });
     });
 });
