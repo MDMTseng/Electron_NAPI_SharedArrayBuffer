@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
     BpgEncoder,
     BpgDecoder,
@@ -7,6 +7,10 @@ import {
     HEADER_SIZE,
     WIRE_HEADER_SIZE,
     BPG_FRAME_MAGIC,
+    BPG_PROTOCOL_VERSION,
+    BPG_SUPPORTED_PROTOCOL_VERSION_MAX,
+    bpgMakeProp,
+    bpgEffectiveProtocolVersion,
 } from '../BPG_Protocol';
 
 function makePacket(overrides: Partial<AppPacket> = {}): AppPacket {
@@ -314,6 +318,17 @@ describe('BPG Protocol', () => {
             expect(decoded).toHaveLength(1);
             expect(decoded[0].tl).toBe(packet.tl);
         });
+
+        it('should keep incomplete tail until final bytes arrive', () => {
+            const packet = makePacket();
+            const encoded = encoder.encodePacket(packet);
+            const decoded: AppPacket[] = [];
+            const almost = encoded.length - 3;
+            decoder.processData(encoded.slice(0, almost), (p) => decoded.push(p), () => {});
+            expect(decoded).toHaveLength(0);
+            decoder.processData(encoded.slice(almost), (p) => decoded.push(p), () => {});
+            expect(decoded).toHaveLength(1);
+        });
     });
 
     // ----------------------------------------------------------------
@@ -356,6 +371,83 @@ describe('BPG Protocol', () => {
             decoder.processData(garbled, (p) => decoded.push(p), () => {});
             expect(decoded).toHaveLength(1);
             expect(decoded[0].tl).toBe(packet.tl);
+        });
+
+        it('should skip multiple leading garbage bytes then decode', () => {
+            const packet = makePacket();
+            const encoded = encoder.encodePacket(packet);
+            const prefix = new Uint8Array([1, 2, 3, 4, 5]);
+            const garbled = new Uint8Array(prefix.length + encoded.length);
+            garbled.set(prefix, 0);
+            garbled.set(encoded, prefix.length);
+            const decoded: AppPacket[] = [];
+            decoder.processData(garbled, (p) => decoded.push(p), () => {});
+            expect(decoded).toHaveLength(1);
+        });
+    });
+
+    describe('UTF-8 metadata', () => {
+        it('should round-trip emoji and CJK in metadata_str', () => {
+            const metadata_str = '{"msg":"🎥 測試"}';
+            const decoded = roundTrip(
+                makePacket({
+                    content: { metadata_str, binary_bytes: new Uint8Array(0) },
+                }),
+            );
+            expect(decoded.content.metadata_str).toBe(metadata_str);
+        });
+    });
+
+    describe('decoder.reset', () => {
+        it('discards buffered partial data so a full packet decodes after reset', () => {
+            const packet = makePacket();
+            const encoded = encoder.encodePacket(packet);
+            const half = Math.floor(encoded.length / 2);
+            decoder.processData(encoded.slice(0, half), () => {}, () => {});
+            decoder.reset();
+            const decoded: AppPacket[] = [];
+            decoder.processData(encoded, (p) => decoded.push(p), () => {});
+            expect(decoded).toHaveLength(1);
+        });
+
+        it('logs on reset', () => {
+            const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+            decoder.reset();
+            expect(log).toHaveBeenCalled();
+            log.mockRestore();
+        });
+    });
+
+    describe('protocol version', () => {
+        it('decoded packets include protocol_version', () => {
+            const decoded = roundTrip(makePacket());
+            expect(decoded.protocol_version).toBe(BPG_PROTOCOL_VERSION);
+        });
+
+        it('legacy prop 0x1 decodes as effective v1', () => {
+            const packet = makePacket({ is_end_of_group: true });
+            const encoded = encoder.encodePacket(packet);
+            const w = new DataView(encoded.buffer, encoded.byteOffset, encoded.byteLength);
+            w.setUint32(4 + 2, 1, false);
+            const decoded: AppPacket[] = [];
+            decoder.processData(encoded, (p) => decoded.push(p), () => {});
+            expect(decoded[0].protocol_version).toBe(1);
+        });
+
+        it('skips unsupported version', () => {
+            const encoded = encoder.encodePacket(makePacket());
+            const w = new DataView(encoded.buffer, encoded.byteOffset, encoded.byteLength);
+            w.setUint32(4 + 2, bpgMakeProp(true, BPG_SUPPORTED_PROTOCOL_VERSION_MAX + 99), false);
+            const decoded: AppPacket[] = [];
+            const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+            decoder.processData(encoded, (p) => decoded.push(p), () => {});
+            expect(decoded).toHaveLength(0);
+            err.mockRestore();
+        });
+
+        it('bpgEffectiveProtocolVersion treats legacy as 1', () => {
+            expect(bpgEffectiveProtocolVersion(0x00000001)).toBe(1);
+            expect(bpgEffectiveProtocolVersion(bpgMakeProp(false, 1))).toBe(1);
         });
     });
 });

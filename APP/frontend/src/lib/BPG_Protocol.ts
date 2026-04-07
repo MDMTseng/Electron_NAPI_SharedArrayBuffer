@@ -16,6 +16,8 @@ export interface AppPacket {
     target_id: number;  
     tl: string;         
     is_end_of_group: boolean; // New flag
+    /** Wire format version (bits 8–15 of prop). Omitted when encoding → {@link BPG_PROTOCOL_VERSION}. Populated when decoding. */
+    protocol_version?: number;
     content: HybridData;
 }
 
@@ -28,8 +30,22 @@ export const BPG_FRAME_MAGIC = 0x42504701;
 export const FRAME_PREFIX_SIZE = 4;
 export const HEADER_SIZE = 18;
 export const WIRE_HEADER_SIZE = FRAME_PREFIX_SIZE + HEADER_SIZE;
-const PROP_EG_BIT_MASK = 0x00000001;
+
+export const PROP_EG_BIT_MASK = 0x00000001;
+export const PROP_VERSION_SHIFT = 8;
+export const BPG_PROTOCOL_VERSION = 1;
+export const BPG_SUPPORTED_PROTOCOL_VERSION_MAX = 1;
+
 const STR_LENGTH_SIZE = 4;
+
+export function bpgMakeProp(isEndOfGroup: boolean, protocolVersion: number = BPG_PROTOCOL_VERSION): number {
+    return ((protocolVersion & 0xff) << PROP_VERSION_SHIFT) | (isEndOfGroup ? PROP_EG_BIT_MASK : 0);
+}
+
+export function bpgEffectiveProtocolVersion(prop: number): number {
+    const v = (prop >> PROP_VERSION_SHIFT) & 0xff;
+    return v === 0 ? 1 : v;
+}
 
 // --- Encoder --- 
 
@@ -60,12 +76,8 @@ export class BpgEncoder {
         packetBytes[offset++] = packet.tl.charCodeAt(0);
         packetBytes[offset++] = packet.tl.charCodeAt(1);
         
-        // Prop (4 bytes, Big Endian)
-        let propValue = 0;
-        if (packet.is_end_of_group) {
-            propValue |= PROP_EG_BIT_MASK; 
-        }
-        dataView.setUint32(offset, propValue, false); 
+        const ver = packet.protocol_version ?? BPG_PROTOCOL_VERSION;
+        dataView.setUint32(offset, bpgMakeProp(packet.is_end_of_group, ver), false); 
         offset += 4;
 
         // Target ID (4 bytes, Big Endian)
@@ -168,7 +180,13 @@ export class BpgDecoder {
             const totalPacketSize = WIRE_HEADER_SIZE + dataLength;
             if (this.internal_buffer.length < totalPacketSize) break; 
 
-            // Check EG Bit from prop field LSB
+            const effVer = bpgEffectiveProtocolVersion(propValue);
+            if (effVer > BPG_SUPPORTED_PROTOCOL_VERSION_MAX) {
+                console.error(`BPG Decoder: Unsupported protocol version ${effVer}. Skipping packet.`);
+                this.internal_buffer = this.internal_buffer.slice(totalPacketSize);
+                continue;
+            }
+
             const isEndOfGroup = (propValue & PROP_EG_BIT_MASK) !== 0;
 
             // --- Deserialize HybridData ---
@@ -210,7 +228,8 @@ export class BpgDecoder {
                 group_id: groupId,
                 target_id: targetId,
                 tl: tl,
-                is_end_of_group: isEndOfGroup, // Set flag
+                is_end_of_group: isEndOfGroup,
+                protocol_version: effVer,
                 content: hybridData
             };
 

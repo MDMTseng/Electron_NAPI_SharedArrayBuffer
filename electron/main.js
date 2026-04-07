@@ -111,8 +111,11 @@ function createMainWindow(config) {
   // Store config details globally
   appMode = config.mode;
   currentArtifactPath = config.artifactPath; // Use path from config
-  if (config.devServerPort) {
-      devServerPort = config.devServerPort;
+  // Prod must not reuse the default 5173 from a previous dev session (would load http instead of file://).
+  if (appMode === 'prod') {
+    devServerPort = null;
+  } else if (config.devServerPort) {
+    devServerPort = config.devServerPort;
   }
 
   const isDevMode = (appMode === 'dev');
