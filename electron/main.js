@@ -28,7 +28,40 @@ function probeDevServer(port, timeoutMs = 500) {
 }
 
 function defaultProdArtifactPath() {
+  // Check for XAppHub_APP sibling repo first (the production app)
+  const xapphub = process.env.XAPPHUB_PATH || path.join(__dirname, '..', '..', 'XAppHub_APP');
+  if (fs.existsSync(path.join(xapphub, 'frontend', 'dist', 'index.html'))) {
+    return xapphub;
+  }
+  // Fall back to this repo's own APP/dist
   return path.join(__dirname, '..', 'APP', 'dist');
+}
+
+/**
+ * Ensure XAppHub dev artifacts are accessible at the paths the frontend expects:
+ *   ${artifactPath}/native/addon.node
+ *   ${artifactPath}/backend/libdlib.dll (or .so/.dylib)
+ */
+function ensureXAppHubLinks(artifactPath) {
+  if (!artifactPath) return;
+  const pairs = [
+    [path.join(artifactPath, 'native', 'build', 'Release', 'addon.node'),
+     path.join(artifactPath, 'native', 'addon.node')],
+    [path.join(artifactPath, 'backend', 'build', 'Release', 'libdlib.dll'),
+     path.join(artifactPath, 'backend', 'libdlib.dll')],
+  ];
+  for (const [src, dst] of pairs) {
+    if (fs.existsSync(src) && !fs.existsSync(dst)) {
+      try { fs.copyFileSync(src, dst); console.log(`Linked: ${path.basename(dst)}`); }
+      catch (e) { console.warn(`Cannot link ${dst}: ${e.message}`); }
+    }
+  }
+  // Add OpenCV to PATH if present
+  const opencvBin = process.env.OPENCV_BIN || 'C:\\opencv\\opencv\\build\\x64\\vc16\\bin';
+  if (fs.existsSync(opencvBin) && !(process.env.PATH || '').includes(opencvBin)) {
+    process.env.PATH = opencvBin + ';' + (process.env.PATH || '');
+    console.log('Added OpenCV to PATH');
+  }
 }
 
 /** When set (e.g. E2E tests), always show BIOS and skip dev-server / dist auto-detect. */
@@ -43,20 +76,30 @@ function shouldForceBios() {
  * Skip BIOS when dev server is up, or when a built APP/dist exists next to the framework.
  */
 async function tryAutoLaunchFromEnvironment() {
+  // Resolve XAppHub path for artifactPath (needed for addon + backend DLL)
+  const xapphub = process.env.XAPPHUB_PATH || path.join(__dirname, '..', '..', 'XAppHub_APP');
+  const xapphubExists = fs.existsSync(path.join(xapphub, 'native'));
+
   if (await probeDevServer(DEFAULT_DEV_PORT)) {
     if (!mainWindow) {
+      // Dev mode: Vite running, point artifactPath to XAppHub root (if it exists)
+      const artifactPath = xapphubExists ? xapphub : null;
+      ensureXAppHubLinks(artifactPath);
       createMainWindow({
         mode: 'dev',
         devServerPort: DEFAULT_DEV_PORT,
-        artifactPath: null,
+        artifactPath,
       });
     }
     return true;
   }
   const artifact = defaultProdArtifactPath();
-  const indexHtml = path.join(artifact, 'frontend', 'index.html');
+  const indexHtml = fs.existsSync(path.join(artifact, 'frontend', 'dist', 'index.html'))
+    ? path.join(artifact, 'frontend', 'dist', 'index.html')
+    : path.join(artifact, 'frontend', 'index.html');
   if (fs.existsSync(indexHtml)) {
     if (!mainWindow) {
+      ensureXAppHubLinks(artifact);
       createMainWindow({
         mode: 'prod',
         artifactPath: artifact,
@@ -110,7 +153,9 @@ function createMainWindow(config) {
   current_config=config;
   // Store config details globally
   appMode = config.mode;
-  currentArtifactPath = config.artifactPath; // Use path from config
+  currentArtifactPath = config.artifactPath;
+  // Ensure XAppHub dev artifacts are linked for the frontend
+  ensureXAppHubLinks(currentArtifactPath);
   // Prod must not reuse the default 5173 from a previous dev session (would load http instead of file://).
   if (appMode === 'prod') {
     devServerPort = null;
@@ -141,7 +186,9 @@ function createMainWindow(config) {
       return;
     }
     // Construct file path URL using the user-provided artifact path
-    const indexPath = path.join(currentArtifactPath, 'frontend', 'index.html');
+    // XAppHub: frontend/dist/index.html; old layout: frontend/index.html
+    const distPath = path.join(currentArtifactPath, 'frontend', 'dist', 'index.html');
+    const indexPath = fs.existsSync(distPath) ? distPath : path.join(currentArtifactPath, 'frontend', 'index.html');
     loadUrl = `file://${indexPath}`;
     console.log(`Loading PROD URL: ${loadUrl}`);
   }
