@@ -8,6 +8,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const DEFAULT_DEV_PORT = 5173;
 
+/** Parse --config=/path/to/config.json from argv (for Playwright E2E). */
+function getConfigPathFromArgs() {
+  for (const arg of process.argv) {
+    if (arg.startsWith('--config=')) return arg.slice('--config='.length);
+  }
+  return null;
+}
+
 /** True if something accepts HTTP on 127.0.0.1:port (e.g. Vite dev server). */
 function probeDevServer(port, timeoutMs = 500) {
   return new Promise((resolve) => {
@@ -151,6 +159,11 @@ function createMainWindow(config) {
   }
   
   current_config=config;
+  // If --config was passed, add it to the config so renderer can auto-load
+  const autoConfig = getConfigPathFromArgs();
+  if (autoConfig) {
+    current_config.autoLoadConfig = autoConfig;
+  }
   // Store config details globally
   appMode = config.mode;
   currentArtifactPath = config.artifactPath;
@@ -199,11 +212,17 @@ function createMainWindow(config) {
 
   // Send relevant config to renderer once it's ready
   mainWindow.webContents.on('did-finish-load', () => {
-      // Send the artifact path received from BIOS
-      const rendererConfig = { 
-          mode: appMode, 
-          artifactPath: currentArtifactPath // Send user-provided path (null in dev)
+      const rendererConfig = {
+          mode: appMode,
+          artifactPath: currentArtifactPath,
       };
+
+      // If --config was passed, tell the renderer to auto-load it
+      const autoConfig = getConfigPathFromArgs();
+      if (autoConfig) {
+          rendererConfig.autoLoadConfig = autoConfig;
+          console.log(`Auto-loading config: ${autoConfig}`);
+      }
       console.log('Main window finished loading. Sending config:', rendererConfig);
       mainWindow?.webContents.send('set-app-config', rendererConfig);
   });
