@@ -104,7 +104,7 @@ describe('Graph Editor — image in NodeInspector', { timeout: 300000 }, () => {
   });
 
   it('set folder on graph instance and load image', async () => {
-    // Send set_folder to the GRAPH instance (imgsrc_folder_plugin_1)
+    // Set folder on the folder source instance
     const setResult = await piExchange(win, 'imgsrc_folder_plugin_1', {
       command: 'set_folder', path: TEST_IMAGES
     });
@@ -115,13 +115,41 @@ describe('Graph Editor — image in NodeInspector', { timeout: 300000 }, () => {
       command: 'get_image'
     });
     console.log(`  get_image: ${JSON.stringify(getResult)}`);
+
+    // Set output directory on the saver instance
+    const OUTPUT_DIR = path.resolve(SCREENSHOT_DIR, '..', 'output').replace(/\\/g, '/');
+    fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+    const saverResult = await piExchange(win, 'imgsaver_plugin_1', {
+      command: 'set_output', path: OUTPUT_DIR, prefix: 'graph', format: '.png'
+    });
+    console.log(`  set_output: ${JSON.stringify(saverResult)}`);
     await sleep(1000);
   });
 
   it('execute graph pipeline', async () => {
+    const nodeCount = await win.locator('.react-flow__node').count();
+    const edgeCount = await win.evaluate(() => document.querySelectorAll('.react-flow__edge').length);
+    console.log(`  Before execute: ${nodeCount} nodes, ${edgeCount} edges`);
+    await sleep(2000);
+
+    // Check graph state before executing
+    const graphState = await win.evaluate(() => {
+      // Access React Flow edges from DOM
+      const edges = document.querySelectorAll('.react-flow__edge').length;
+      const nodes = document.querySelectorAll('.react-flow__node').length;
+      return { nodes, edges };
+    });
+    console.log(`  DOM state: ${graphState.nodes} nodes, ${graphState.edges} edges`);
+
     await win.locator('button:has-text("Execute")').click();
     console.log('  Graph executing...');
     await sleep(5000);
+
+    // Check saved files
+    const OUTPUT_DIR = path.resolve(SCREENSHOT_DIR, '..', 'output');
+    const saved = fs.existsSync(OUTPUT_DIR) ? fs.readdirSync(OUTPUT_DIR).filter(f => f.startsWith('graph_')) : [];
+    console.log(`  Saved files: ${saved.length} (${saved.join(', ')})`);
+
     await shot(win, 'graph_02_after_execute.png');
   });
 
