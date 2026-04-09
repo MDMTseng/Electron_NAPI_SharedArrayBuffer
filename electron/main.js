@@ -36,10 +36,16 @@ function probeDevServer(port, timeoutMs = 500) {
 }
 
 function defaultProdArtifactPath() {
-  // Check for XAppHub_APP sibling repo first (the production app)
-  const xapphub = process.env.XAPPHUB_PATH || path.join(__dirname, '..', '..', 'XAppHub_APP');
-  if (fs.existsSync(path.join(xapphub, 'frontend', 'dist', 'index.html'))) {
-    return xapphub;
+  if (process.env.XAPPHUB_PATH) return process.env.XAPPHUB_PATH;
+  // Submodule layout: Electron is inside XAppHub_APP → parent is XAppHub_APP
+  const parentDir = path.resolve(__dirname, '..', '..');
+  if (fs.existsSync(path.join(parentDir, 'frontend', 'dist', 'index.html'))) {
+    return parentDir;
+  }
+  // Sibling layout: xInsp/Electron alongside xInsp/XAppHub_APP
+  const sibling = path.join(__dirname, '..', '..', 'XAppHub_APP');
+  if (fs.existsSync(path.join(sibling, 'frontend', 'dist', 'index.html'))) {
+    return sibling;
   }
   // Fall back to this repo's own APP/dist
   return path.join(__dirname, '..', 'APP', 'dist');
@@ -84,8 +90,11 @@ function shouldForceBios() {
  * Skip BIOS when dev server is up, or when a built APP/dist exists next to the framework.
  */
 async function tryAutoLaunchFromEnvironment() {
-  // Resolve XAppHub path for artifactPath (needed for addon + backend DLL)
-  const xapphub = process.env.XAPPHUB_PATH || path.join(__dirname, '..', '..', 'XAppHub_APP');
+  // Resolve XAppHub path — works as submodule (parent) or sibling
+  const parentDir = path.resolve(__dirname, '..', '..');
+  const siblingDir = path.join(__dirname, '..', '..', 'XAppHub_APP');
+  const xapphub = process.env.XAPPHUB_PATH
+    || (fs.existsSync(path.join(parentDir, 'native')) ? parentDir : siblingDir);
   const xapphubExists = fs.existsSync(path.join(xapphub, 'native'));
 
   if (await probeDevServer(DEFAULT_DEV_PORT)) {

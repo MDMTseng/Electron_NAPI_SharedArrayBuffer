@@ -22,15 +22,10 @@ import assert from 'node:assert/strict';
 import { _electron as electron } from 'playwright';
 import path from 'node:path';
 import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { ELECTRON_ROOT, XAPPHUB, TEST_IMAGES, SCREENSHOT_DIR, CONFIG } from './test_paths.mjs';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ELECTRON_ROOT = path.resolve(__dirname, '..');
-const XAPPHUB = path.resolve(__dirname, '..', '..', 'XAppHub_APP');
-const CONFIG = path.join(XAPPHUB, 'tests', 'e2e_graph_pipeline_config.json');
-const TEST_IMAGES = path.resolve(__dirname, '..', '..', 'test_images').replace(/\\/g, '/');
-const SCREENSHOT_DIR = path.resolve(__dirname, '..', '..', 'screenshot');
-const PROJECT_DIR = path.resolve(__dirname, '..', '..', 'test_prj').replace(/\\/g, '/');
+// test_prj lives in workspace root (same level as test_images)
+const PROJECT_DIR = path.resolve(path.dirname(TEST_IMAGES), 'test_prj').replace(/\\/g, '/');
 
 fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
