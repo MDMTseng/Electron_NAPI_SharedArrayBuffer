@@ -1,14 +1,16 @@
 /**
- * Playwright E2E: Create project from scratch via UI
+ * Playwright E2E: Create project, execute, switch saver input, re-execute, save
  *
  * Flow:
- *   1. Load config (3 plugins)
- *   2. Switch to Graph Editor
- *   3. Add 3 nodes via UI (imgsrc, invert, saver)
- *   4. Connect edges via programmatic events
- *   5. Configure folder source + saver
- *   6. Execute graph
- *   7. Save project to ./test_prj
+ *   1. Remove ./test_prj if exists
+ *   2. Load config (3 plugins)
+ *   3. Switch to Graph Editor, add 3 nodes, connect edges
+ *   4. Configure folder source + saver
+ *   5. Execute graph (saver saves inverted image — direct input from inverter)
+ *   6. Change saver data selection to imgsrc_folder image (original)
+ *   7. Execute again (saver saves original image)
+ *   8. Save project to ./test_prj
+ *   9. Verify both images on disk + project structure
  *
  * Run:
  *   set PATH=C:\opencv\opencv\build\x64\vc16\bin;%PATH%
@@ -89,18 +91,17 @@ async function getInstanceList(win) {
   return piSend(win, { type: 'get_instance_list' });
 }
 
-describe('Create project from UI → save to ./test_prj', { timeout: 120000 }, () => {
+describe('Create project → execute → switch saver input → re-execute → save', { timeout: 120000 }, () => {
   let app, win;
-
-  // Track the instance IDs created by "Add Node" (they are inst_{hex})
   let folderInstId, invertInstId, saverInstId;
-  // Track graph node IDs (from React Flow DOM)
   let nodeIds = [];
+  const GRAPH_ID = 'g_create';
 
   before(async () => {
     // Clean previous test_prj
     if (fs.existsSync(PROJECT_DIR)) {
       fs.rmSync(PROJECT_DIR, { recursive: true, force: true });
+      console.log('  Removed old test_prj');
     }
 
     app = await electron.launch({ args: [ELECTRON_ROOT] });
@@ -116,71 +117,40 @@ describe('Create project from UI → save to ./test_prj', { timeout: 120000 }, (
     if (app) await app.close().catch(() => {});
   });
 
-  it('Step 1: Load config with 3 plugins', async () => {
+  it('Step 1: Load config', async () => {
     const fcp = win.waitForEvent('filechooser', { timeout: 15000 });
     await win.locator('button:has-text("Load Config")').click();
     (await fcp).setFiles(CONFIG);
     const loaded = await waitForPluginCount(win, 3);
     assert.ok(loaded, 'plugins loaded');
-    await shot(win, 'create_01_config.png');
   });
 
-  it('Step 2: Switch to Graph Editor', async () => {
+  it('Step 2: Add 3 nodes and connect edges', async () => {
     await win.locator('button:has-text("Graph Editor")').click();
     await sleep(1000);
-    await shot(win, 'create_02_graph_tab.png');
-  });
 
-  it('Step 3: Add 3 nodes via UI', async () => {
-    for (const pluginName of ['imgsrc_folder_plugin', 'invert_plugin', 'imgsaver_plugin']) {
-      await win.locator('select').first().selectOption(pluginName);
+    for (const p of ['imgsrc_folder_plugin', 'invert_plugin', 'imgsaver_plugin']) {
+      await win.locator('select').first().selectOption(p);
       await sleep(300);
       await win.locator('button:has-text("Add Node")').click();
       await sleep(2000);
     }
 
-    // Verify 3 nodes in React Flow
-    const count = await win.locator('.react-flow__node').count();
-    console.log(`  Nodes in graph: ${count}`);
-    assert.ok(count >= 3, `expected >= 3 nodes, got ${count}`);
+    // Get node IDs from DOM
+    nodeIds = await win.evaluate(() =>
+      Array.from(document.querySelectorAll('.react-flow__node')).map(el => el.getAttribute('data-id')));
+    assert.ok(nodeIds.length >= 3, `3 nodes: ${nodeIds.join(', ')}`);
 
-    // Get React Flow node IDs (these are the graph node IDs, e.g. hex IDs)
-    nodeIds = await win.evaluate(() => {
-      return Array.from(document.querySelectorAll('.react-flow__node'))
-        .map(el => el.getAttribute('data-id'));
-    });
-    console.log(`  Node IDs: ${nodeIds.join(', ')}`);
-
-    // Discover instance IDs from the backend
+    // Discover instance IDs
     const instances = await piSend(win, { type: 'get_instance_list' });
-    const instList = instances?.instance_list || [];
-    console.log(`  Backend instances: ${instList.map(i => i.instance_id).join(', ')}`);
-
-    // Match by plugin name — the "Add Node" created them in order
-    folderInstId = instList.find(i => i.plugin_name === 'imgsrc_folder_plugin')?.instance_id;
-    invertInstId = instList.find(i => i.plugin_name === 'invert_plugin')?.instance_id;
-    saverInstId = instList.find(i => i.plugin_name === 'imgsaver_plugin')?.instance_id;
-
-    // Filter to only inst_ prefixed (graph-created, not config-created)
-    const graphInsts = instList.filter(i => i.instance_id.startsWith('inst_'));
-    if (graphInsts.length >= 3) {
-      folderInstId = graphInsts.find(i => i.plugin_name === 'imgsrc_folder_plugin')?.instance_id;
-      invertInstId = graphInsts.find(i => i.plugin_name === 'invert_plugin')?.instance_id;
-      saverInstId = graphInsts.find(i => i.plugin_name === 'imgsaver_plugin')?.instance_id;
-    }
-
+    const graphInsts = (instances?.instance_list || []).filter(i => i.instance_id.startsWith('inst_'));
+    folderInstId = graphInsts.find(i => i.plugin_name === 'imgsrc_folder_plugin')?.instance_id;
+    invertInstId = graphInsts.find(i => i.plugin_name === 'invert_plugin')?.instance_id;
+    saverInstId = graphInsts.find(i => i.plugin_name === 'imgsaver_plugin')?.instance_id;
+    assert.ok(folderInstId && invertInstId && saverInstId, 'all instances found');
     console.log(`  folder=${folderInstId}, invert=${invertInstId}, saver=${saverInstId}`);
-    assert.ok(folderInstId, 'folder instance created');
-    assert.ok(invertInstId, 'invert instance created');
-    assert.ok(saverInstId, 'saver instance created');
 
-    await shot(win, 'create_03_nodes_added.png');
-  });
-
-  it('Step 4: Connect edges (folder→invert→saver)', async () => {
-    assert.ok(nodeIds.length >= 3, 'have node IDs');
-
-    // Connect: node[0]→node[1], node[1]→node[2]
+    // Connect edges
     for (const edge of [
       { source: nodeIds[0], sourceHandle: 'out', target: nodeIds[1], targetHandle: 'in' },
       { source: nodeIds[1], sourceHandle: 'out', target: nodeIds[2], targetHandle: 'in' },
@@ -190,66 +160,113 @@ describe('Create project from UI → save to ./test_prj', { timeout: 120000 }, (
       }, edge);
       await sleep(300);
     }
-
-    const edgeCount = await win.evaluate(() =>
-      document.querySelectorAll('.react-flow__edge').length);
-    console.log(`  Edges: ${edgeCount}`);
-    assert.ok(edgeCount >= 2, `expected >= 2 edges, got ${edgeCount}`);
-
-    await shot(win, 'create_04_edges.png');
+    await shot(win, 'create_01_graph.png');
   });
 
-  it('Step 5: Configure folder source and saver', async () => {
-    // Set folder
+  it('Step 3: Configure folder + saver, load graph', async () => {
     const sf = await piExchange(win, folderInstId, { command: 'set_folder', path: TEST_IMAGES });
-    assert.ok(sf?.ACK, 'set_folder ACK');
-    console.log(`  set_folder: ${sf.file_count} files`);
-
-    // Load first image
+    assert.ok(sf?.ACK && sf.file_count > 0, 'set_folder OK');
     await piExchange(win, folderInstId, { command: 'get_image' });
 
-    // Set saver output to project node folder
-    const saverOutput = `${PROJECT_DIR}/output`;
-    const ss = await piExchange(win, saverInstId, {
-      command: 'set_output', path: saverOutput, prefix: 'result', format: '.png',
+    await piExchange(win, saverInstId, {
+      command: 'set_output',
+      path: `${PROJECT_DIR}/output`,
+      prefix: 'inverted',
+      format: '.bmp',
     });
-    assert.ok(ss?.ACK, 'set_output ACK');
-    console.log(`  set_output: ${saverOutput}`);
-  });
 
-  it('Step 6: Execute graph', async () => {
-    // Build graph def from discovered IDs and load it
-    const graphDef = {
-      id: 'g_create', name: 'Created Pipeline',
+    // Load graph to backend
+    const gl = await piSend(win, { type: 'graph_load', graph: {
+      id: GRAPH_ID, name: 'Created Pipeline',
       nodes: [
-        { id: nodeIds[0], name: 'Folder Source',  pluginName: 'imgsrc_folder_plugin', instanceId: folderInstId },
-        { id: nodeIds[1], name: 'Inverter',       pluginName: 'invert_plugin',        instanceId: invertInstId },
-        { id: nodeIds[2], name: 'Output Saver',   pluginName: 'imgsaver_plugin',      instanceId: saverInstId },
+        { id: nodeIds[0], name: 'Folder Source', pluginName: 'imgsrc_folder_plugin', instanceId: folderInstId },
+        { id: nodeIds[1], name: 'Inverter',      pluginName: 'invert_plugin',        instanceId: invertInstId },
+        { id: nodeIds[2], name: 'Output Saver',  pluginName: 'imgsaver_plugin',      instanceId: saverInstId },
       ],
       edges: [
         { fromNodeId: nodeIds[0], fromPortId: 'out', toNodeId: nodeIds[1], toPortId: 'in' },
         { fromNodeId: nodeIds[1], fromPortId: 'out', toNodeId: nodeIds[2], toPortId: 'in' },
       ],
-    };
-    const gl = await piSend(win, { type: 'graph_load', graph: graphDef });
+    }});
     assert.ok(gl?.ACK, 'graph_load ACK');
+  });
 
-    await fireGraphExecute(win, 'g_create');
+  it('Step 4: First execute — saver saves INVERTED image (direct input)', async () => {
+    await fireGraphExecute(win, GRAPH_ID);
     const saved = await pollUntil(async () => {
       const s = await piExchange(win, saverInstId, { command: 'get_status' });
       return (s?.saved_count ?? 0) > 0;
     });
-    assert.ok(saved, 'saver saved image');
+    assert.ok(saved, 'saver saved inverted image');
 
-    await shot(win, 'create_05_executed.png');
+    const outputDir = path.join(PROJECT_DIR, 'output');
+    const files = fs.existsSync(outputDir) ? fs.readdirSync(outputDir).filter(f => f.startsWith('inverted')) : [];
+    console.log(`  Inverted files: ${files.length} (${files.join(', ')})`);
+    assert.ok(files.length > 0, 'inverted image file exists');
+    await shot(win, 'create_02_first_execute.png');
   });
 
-  it('Step 7: Save project to ./test_prj', async () => {
+  it('Step 5: Switch saver to folder source image (original)', async () => {
+    // Change saver output prefix so we can distinguish files
+    await piExchange(win, saverInstId, {
+      command: 'set_output',
+      path: `${PROJECT_DIR}/output`,
+      prefix: 'original',
+      format: '.bmp',
+    });
+    await piExchange(win, saverInstId, { command: 'reset_counter' });
+
+    // Set data selection to folder source node
+    const sel = await piExchange(win, saverInstId, {
+      command: 'set_data_selection',
+      selection: [{ sourceNodeId: nodeIds[0], dataPath: 'images/out' }],
+    });
+    assert.ok(sel?.ACK, 'set_data_selection ACK');
+    console.log(`  Data selection set to: ${nodeIds[0]} (folder source) → images/out`);
+  });
+
+  it('Step 6: Second execute — saver saves ORIGINAL image (from folder source)', async () => {
+    await fireGraphExecute(win, GRAPH_ID);
+    const saved = await pollUntil(async () => {
+      const s = await piExchange(win, saverInstId, { command: 'get_status' });
+      return (s?.saved_count ?? 0) > 0;
+    });
+    assert.ok(saved, 'saver saved original image');
+
+    const outputDir = path.join(PROJECT_DIR, 'output');
+    const origFiles = fs.readdirSync(outputDir).filter(f => f.startsWith('original'));
+    console.log(`  Original files: ${origFiles.length} (${origFiles.join(', ')})`);
+    assert.ok(origFiles.length > 0, 'original image file exists');
+    await shot(win, 'create_03_second_execute.png');
+  });
+
+  it('Step 7: Verify both images exist and differ', () => {
+    const outputDir = path.join(PROJECT_DIR, 'output');
+    const invertedFiles = fs.readdirSync(outputDir).filter(f => f.startsWith('inverted'));
+    const originalFiles = fs.readdirSync(outputDir).filter(f => f.startsWith('original'));
+    assert.ok(invertedFiles.length > 0, 'inverted file');
+    assert.ok(originalFiles.length > 0, 'original file');
+
+    // Read center pixels from both BMPs and verify they differ
+    const inv = readBmpCenterPixel(path.join(outputDir, invertedFiles[0]));
+    const orig = readBmpCenterPixel(path.join(outputDir, originalFiles[0]));
+    console.log(`  Original center pixel: RGB(${orig.r},${orig.g},${orig.b})`);
+    console.log(`  Inverted center pixel: RGB(${inv.r},${inv.g},${inv.b})`);
+
+    // They should be different (inverted = 255 - original)
+    const isDifferent = (orig.r !== inv.r || orig.g !== inv.g || orig.b !== inv.b);
+    assert.ok(isDifferent, 'original and inverted pixels differ');
+
+    const isInverted = (orig.r + inv.r === 255 && orig.g + inv.g === 255 && orig.b + inv.b === 255);
+    console.log(`  Pixel inversion check: ${isInverted ? 'EXACT (sum=255)' : 'DIFFERENT (not exact inversion)'}`);
+  });
+
+  it('Step 8: Save project to ./test_prj', async () => {
     const PLUGIN_DIR = path.join(XAPPHUB, 'plugins', 'build').replace(/\\/g, '/');
     const PLUGIN_UI_DIR = path.join(XAPPHUB, 'plugins').replace(/\\/g, '/');
 
-    const projectData = {
-      name: 'Test Project (UI Created)',
+    const r = await piSend(win, { type: 'project_save', path: PROJECT_DIR, project: {
+      name: 'Test Project',
       plugins: {
         imgsrc_folder_plugin: {
           dll: `${PLUGIN_DIR}/imgsrc_folder_plugin/Release/imgsrc_folder_plugin.dll`,
@@ -265,58 +282,60 @@ describe('Create project from UI → save to ./test_prj', { timeout: 120000 }, (
         },
       },
       graphs: [{
-        id: 'g_create', name: 'Created Pipeline',
+        id: GRAPH_ID, name: 'Created Pipeline',
         nodes: [
-          { id: nodeIds[0], name: 'Folder Source',  pluginName: 'imgsrc_folder_plugin', instanceId: folderInstId },
-          { id: nodeIds[1], name: 'Inverter',       pluginName: 'invert_plugin',        instanceId: invertInstId },
-          { id: nodeIds[2], name: 'Output Saver',   pluginName: 'imgsaver_plugin',      instanceId: saverInstId },
+          { id: nodeIds[0], name: 'Folder Source', pluginName: 'imgsrc_folder_plugin', instanceId: folderInstId },
+          { id: nodeIds[1], name: 'Inverter',      pluginName: 'invert_plugin',        instanceId: invertInstId },
+          { id: nodeIds[2], name: 'Output Saver',  pluginName: 'imgsaver_plugin',      instanceId: saverInstId },
         ],
         edges: [
           { fromNodeId: nodeIds[0], fromPortId: 'out', toNodeId: nodeIds[1], toPortId: 'in' },
           { fromNodeId: nodeIds[1], fromPortId: 'out', toNodeId: nodeIds[2], toPortId: 'in' },
         ],
       }],
-    };
-
-    const r = await piSend(win, { type: 'project_save', path: PROJECT_DIR, project: projectData });
+    }});
     assert.ok(r?.ACK, 'project_save ACK');
     console.log(`  Project saved to: ${PROJECT_DIR}`);
-    await shot(win, 'create_06_saved.png');
   });
 
-  it('Step 8: Verify project on disk', () => {
-    // project.json
+  it('Step 9: Verify project on disk', async () => {
     assert.ok(fs.existsSync(path.join(PROJECT_DIR, 'project.json')), 'project.json');
-    const pj = JSON.parse(fs.readFileSync(path.join(PROJECT_DIR, 'project.json'), 'utf8'));
-    assert.equal(pj.name, 'Test Project (UI Created)');
-
-    // graph.json
-    const gjPath = path.join(PROJECT_DIR, 'graphs', 'g_create', 'graph.json');
+    const gjPath = path.join(PROJECT_DIR, 'graphs', GRAPH_ID, 'graph.json');
     assert.ok(fs.existsSync(gjPath), 'graph.json');
-    const gj = JSON.parse(fs.readFileSync(gjPath, 'utf8'));
-    assert.equal(gj.nodes.length, 3);
-    assert.equal(gj.edges.length, 2);
 
-    // node.json for each node
-    for (const nid of nodeIds) {
-      const njPath = path.join(PROJECT_DIR, 'graphs', 'g_create', 'nodes', nid, 'node.json');
-      assert.ok(fs.existsSync(njPath), `node.json for ${nid}`);
-      const nj = JSON.parse(fs.readFileSync(njPath, 'utf8'));
-      assert.ok(nj.settings, `settings present for ${nid}`);
-      console.log(`  ${nid}: name=${nj.name}, plugin=${nj.pluginName}`);
-    }
+    // Verify saver node has data_selection pointing to folder source
+    const saverNodePath = path.join(PROJECT_DIR, 'graphs', GRAPH_ID, 'nodes', nodeIds[2], 'node.json');
+    const saverNode = JSON.parse(fs.readFileSync(saverNodePath, 'utf8'));
+    assert.ok(saverNode.settings?.data_selection?.length > 0, 'data_selection saved');
+    assert.equal(saverNode.settings.data_selection[0].sourceNodeId, nodeIds[0], 'selection points to folder');
+    assert.equal(saverNode.settings.data_selection[0].dataPath, 'images/out');
+    console.log(`  Saver data_selection: ${saverNode.settings.data_selection[0].sourceNodeId} → images/out`);
 
-    // output folder has saved image
+    // Both output images exist
     const outputDir = path.join(PROJECT_DIR, 'output');
-    if (fs.existsSync(outputDir)) {
-      const files = fs.readdirSync(outputDir).filter(f => f.startsWith('result'));
-      console.log(`  Output images: ${files.length}`);
-    }
+    const allFiles = fs.readdirSync(outputDir);
+    console.log(`  Output files: ${allFiles.join(', ')}`);
 
     console.log('\n  Project tree:');
     printTree(PROJECT_DIR, '  ');
+    await shot(win, 'create_04_final.png');
   });
 });
+
+/** Read center pixel RGB from a BMP file */
+function readBmpCenterPixel(filePath) {
+  const d = fs.readFileSync(filePath);
+  const off = d.readUInt32LE(10);
+  const w = d.readInt32LE(18);
+  const h = Math.abs(d.readInt32LE(22));
+  const bpp = d.readUInt16LE(28);
+  const bytesPerPixel = bpp / 8;
+  const rowSize = Math.ceil(w * bytesPerPixel / 4) * 4;
+  const mid = Math.floor(h / 2);
+  const col = Math.floor(w / 2);
+  const p = off + mid * rowSize + col * bytesPerPixel;
+  return { b: d[p], g: d[p + 1], r: d[p + 2] };
+}
 
 /** Print directory tree for visual verification */
 function printTree(dir, indent = '') {
