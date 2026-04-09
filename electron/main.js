@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import http from 'http';
@@ -256,6 +256,12 @@ ipcMain.on('get-current-config', (event, config) => {
 });
 
 
+
+// --- Folder picker dialog for project save/load ---
+ipcMain.handle('show-open-dialog', async (event, options) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  return dialog.showOpenDialog(win, options);
+});
 
 // --- Native addon loading (uses currentArtifactPath set from BIOS) ---
 ipcMain.handle('get_native_api', async (event) => {
